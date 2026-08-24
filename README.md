@@ -4,6 +4,8 @@ Live-reloading OpenAPI/Swagger preview for Neovim, powered by [Scalar CLI](https
 
 Unlike older Swagger-preview plugins built on `swagger-ui-watcher` → `swagger-editor-dist@3.x` (which has no OpenAPI 3.1/3.2 support and throws on `openapi: 3.2.x` documents), this plugin shells out to Scalar's actively maintained CLI, which understands OpenAPI 3.2 (`$self`, `additionalOperations`, etc.).
 
+> This is an unofficial, community project. It is not affiliated with, endorsed by, or sponsored by Scalar; it simply invokes their open-source `@scalar/cli` as an external process. The command/module structure took inspiration from [vinnymeller/swagger-preview.nvim](https://github.com/vinnymeller/swagger-preview.nvim).
+
 ## Requirements
 
 - Neovim ≥ 0.10 (uses `vim.ui.open`)
