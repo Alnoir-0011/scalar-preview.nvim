@@ -6,6 +6,7 @@ M.config = {
 }
 
 M.job_id = nil
+M.stopped_jobs = {}
 M.file_being_previewed = nil
 M.log_path = vim.fn.stdpath("state") .. "/scalar-preview.log"
 M.warned = false
@@ -37,7 +38,7 @@ function M.start()
   local cmd =
     string.format("npx --yes @scalar/cli document serve %s -w -p %d", vim.fn.shellescape(basename), M.config.port)
 
-  M.job_id = vim.fn.jobstart(cmd, {
+  local id = vim.fn.jobstart(cmd, {
     cwd = dir,
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
@@ -62,19 +63,43 @@ function M.start()
         end
       end
     end,
-    on_exit = function(_, code)
-      if code ~= 0 then
+    -- on_exit fires asynchronously, so after a restart the old job's exit can arrive once
+    -- the new job is already running. Only clear state that still belongs to this job. We
+    -- suppress the error notification purely based on whether *we* called stop() for this
+    -- job id, not the exit code (SIGTERM is 143 on POSIX, but jobstop()'s behavior on
+    -- Windows isn't guaranteed to match), so a deliberate stop never reports as a failure
+    -- regardless of platform.
+    on_exit = function(id, code)
+      local stopped = M.stopped_jobs[id]
+      M.stopped_jobs[id] = nil
+      if code ~= 0 and not stopped then
         vim.notify("ScalarPreview exited with code " .. code, vim.log.levels.ERROR)
       end
-      M.job_id = nil
-      M.file_being_previewed = nil
+      if M.job_id == id then
+        M.job_id = nil
+        M.file_being_previewed = nil
+      end
     end,
   })
+
+  -- jobstart returns 0 (invalid arguments) or -1 (cmd[0]/'shell' not executable) on failure.
+  -- With a string {cmd} this practically can't happen from a missing `npx` (the shell itself
+  -- starts fine; a missing command surfaces later as a nonzero on_exit), but it can occur if
+  -- the job table is full or 'shell' is misconfigured, and either return value is truthy in
+  -- Lua, so an unguarded assignment below would treat a failed start as a running job id and
+  -- leave an orphaned M.stopped_jobs entry if stop() is ever called for it.
+  if id <= 0 then
+    vim.notify("ScalarPreview: failed to start (jobstart returned " .. id .. ")", vim.log.levels.ERROR)
+    return
+  end
+
+  M.job_id = id
   M.file_being_previewed = path
 end
 
 function M.stop()
   if M.job_id then
+    M.stopped_jobs[M.job_id] = true
     vim.fn.jobstop(M.job_id)
   end
   M.job_id = nil
