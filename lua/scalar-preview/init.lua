@@ -18,12 +18,31 @@ end
 function M.start()
   local path = vim.fn.expand("%:p")
 
+  -- Special buffers (terminal, help, quickfix, scratch, ...) and unnamed buffers either have
+  -- no real file on disk or a path that doesn't mean what it looks like; refuse clearly
+  -- instead of letting @scalar/cli fail later with a confusing "file not found".
+  if vim.bo.buftype ~= "" or path == "" then
+    vim.notify("ScalarPreview: no file to preview in this buffer", vim.log.levels.ERROR)
+    return
+  end
+
+  if vim.fn.filereadable(path) == 0 then
+    vim.notify("ScalarPreview: file does not exist on disk: " .. path, vim.log.levels.ERROR)
+    return
+  end
+
   if path == M.file_being_previewed then
     return
   end
 
   if M.job_id then
     M.stop()
+  end
+
+  -- The preview always reflects what's on disk, not the buffer's in-memory contents, so warn
+  -- (but don't block) when they can currently differ.
+  if vim.bo.modified then
+    vim.notify("ScalarPreview: previewing the version on disk; unsaved changes aren't shown", vim.log.levels.WARN)
   end
 
   vim.fn.writefile({}, M.log_path)
@@ -50,12 +69,16 @@ function M.start()
     -- Multi-line stack traces come through as one on_stderr line per frame; notifying each
     -- individually floods the UI with dozens of popups, so log them to a file and surface a
     -- single warning instead. Lines that are purely cursor-visibility ANSI codes (the CLI's
-    -- spinner) aren't real warnings, so strip those before deciding whether to notify.
+    -- spinner) aren't real warnings, so strip those before deciding whether to notify. `npm
+    -- warn` lines (EBADENGINE, deprecated subdependencies, ...) come from npx/npm itself, not
+    -- from @scalar/cli, and show up on practically every run, so they're logged but don't
+    -- trigger the notification either.
     on_stderr = function(_, data)
       vim.fn.writefile(data, M.log_path, "a")
       if not M.warned then
         for _, line in ipairs(data) do
-          if line:gsub("\27%[%?25[lh]", ""):match("%S") then
+          local stripped = line:gsub("\27%[%?25[lh]", "")
+          if stripped:match("%S") and not stripped:lower():match("^npm warn") then
             M.warned = true
             vim.notify("ScalarPreview: warnings in output, see " .. M.log_path, vim.log.levels.WARN)
             break
