@@ -15,20 +15,43 @@ function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
 end
 
+-- If a guard below refuses to (re)start, say so plainly, and if a previous preview is still
+-- running say that too: refusing doesn't stop it, so whatever it's serving (see the note on
+-- $ref in README's "Known limitations") stays reachable on the network regardless.
+local function notify_refused(reason)
+  local suffix = ""
+  if M.job_id then
+    suffix = " (previous preview of " .. M.file_being_previewed .. " is still running)"
+  end
+  vim.notify("ScalarPreview: " .. reason .. suffix, vim.log.levels.ERROR)
+end
+
 function M.start()
   local path = vim.fn.expand("%:p")
 
-  -- Special buffers (terminal, help, quickfix, scratch, ...) and unnamed buffers either have
-  -- no real file on disk or a path that doesn't mean what it looks like; refuse clearly
-  -- instead of letting @scalar/cli fail later with a confusing "file not found".
-  if vim.bo.buftype ~= "" or path == "" then
-    vim.notify("ScalarPreview: no file to preview in this buffer", vim.log.levels.ERROR)
+  if path == "" then
+    notify_refused("no file to preview in this buffer (unnamed buffer)")
+    return
+  end
+
+  -- Special buffers (terminal, help, quickfix, scratch, ...) have a 'buftype', and while some
+  -- of them do point at a real file on disk, serving it generally isn't what was intended.
+  if vim.bo.buftype ~= "" then
+    notify_refused("no file to preview in this buffer (buftype=" .. vim.bo.buftype .. ")")
     return
   end
 
   if vim.fn.filereadable(path) == 0 then
-    vim.notify("ScalarPreview: file does not exist on disk: " .. path, vim.log.levels.ERROR)
+    notify_refused("file is not readable on disk: " .. path)
     return
+  end
+
+  -- The preview always reflects what's on disk, not the buffer's in-memory contents, so warn
+  -- (but don't block) whenever they can currently differ -- including when :ScalarPreview is
+  -- called again on the file it's already previewing, since the warning is about the buffer
+  -- being out of sync with disk right now, not about (re)starting the job below.
+  if vim.bo.modified then
+    vim.notify("ScalarPreview: previewing the version on disk; unsaved changes aren't shown", vim.log.levels.WARN)
   end
 
   if path == M.file_being_previewed then
@@ -37,12 +60,6 @@ function M.start()
 
   if M.job_id then
     M.stop()
-  end
-
-  -- The preview always reflects what's on disk, not the buffer's in-memory contents, so warn
-  -- (but don't block) when they can currently differ.
-  if vim.bo.modified then
-    vim.notify("ScalarPreview: previewing the version on disk; unsaved changes aren't shown", vim.log.levels.WARN)
   end
 
   vim.fn.writefile({}, M.log_path)
@@ -68,16 +85,20 @@ function M.start()
     end,
     -- Multi-line stack traces come through as one on_stderr line per frame; notifying each
     -- individually floods the UI with dozens of popups, so log them to a file and surface a
-    -- single warning instead. Lines that are purely cursor-visibility ANSI codes (the CLI's
-    -- spinner) aren't real warnings, so strip those before deciding whether to notify. `npm
-    -- warn` lines (EBADENGINE, deprecated subdependencies, ...) come from npx/npm itself, not
-    -- from @scalar/cli, and show up on practically every run, so they're logged but don't
-    -- trigger the notification either.
+    -- single warning instead. Lines that are purely cursor-visibility or color ANSI codes
+    -- (the CLI's spinner, or `npm`'s own colored output if the user has `color=always` in
+    -- their npmrc) aren't real warnings on their own, so strip those before deciding whether
+    -- to notify. `npm warn` lines (EBADENGINE, deprecated subdependencies, ...) come from
+    -- npx/npm itself, not from @scalar/cli, and show up on practically every run, so they're
+    -- logged but don't trigger the notification either. (`npm warn exec "... will be
+    -- installed"`, which would be the one `npm warn` line actually worth surfacing, never
+    -- reaches here in the first place: npm only prints it when NOT given `-y`/`--yes`, and
+    -- the command above always passes `--yes`.)
     on_stderr = function(_, data)
       vim.fn.writefile(data, M.log_path, "a")
       if not M.warned then
         for _, line in ipairs(data) do
-          local stripped = line:gsub("\27%[%?25[lh]", "")
+          local stripped = line:gsub("\27%[[%d;?]*[a-zA-Z]", "")
           if stripped:match("%S") and not stripped:lower():match("^npm warn") then
             M.warned = true
             vim.notify("ScalarPreview: warnings in output, see " .. M.log_path, vim.log.levels.WARN)

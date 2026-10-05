@@ -45,4 +45,20 @@ describe("stderr filtering", function()
 
     assert.are.same({}, stub.warnings(notifications))
   end)
+
+  it("does not warn on npm's own warnings even when npm colors them (npmrc color=always)", function()
+    local job = jobs.started[1]
+
+    job.opts.on_stderr(job.id, { "\27[33mnpm\27[39m warn EBADENGINE Unsupported engine {" })
+
+    assert.are.same({}, stub.warnings(notifications))
+  end)
+
+  it("still warns on a real warning wrapped in color codes", function()
+    local job = jobs.started[1]
+
+    job.opts.on_stderr(job.id, { "\27[33m\27[1m[WARN] Could not find any paths in the OpenAPI file.\27[22m\27[39m" })
+
+    assert.are.equal(1, #stub.warnings(notifications))
+  end)
 end)
