@@ -63,6 +63,21 @@ local function check_node_version()
 end
 
 function M.check()
+  -- vim.health.start()/ok()/warn()/error() are themselves a Neovim >= 0.10 API (replacing
+  -- the older vim.health.report_*() names); on an older Neovim, vim.health.start would be
+  -- nil, and calling it would raise a raw "attempt to call field 'start' (a nil value)"
+  -- instead of the check_neovim_version() message below that's meant to tell a user on
+  -- exactly that older Neovim to upgrade. Fall back to a plain notification instead.
+  if vim.health == nil or vim.health.start == nil then
+    vim.notify(
+      "scalar-preview.nvim: this Neovim version is too old to run `:checkhealth scalar-preview` "
+        .. "itself (needs the vim.health API added in Neovim 0.10); scalar-preview.nvim needs "
+        .. "Neovim >= 0.10 regardless. Please upgrade Neovim.",
+      vim.log.levels.ERROR
+    )
+    return
+  end
+
   vim.health.start("scalar-preview.nvim")
   check_neovim_version()
   check_npx()

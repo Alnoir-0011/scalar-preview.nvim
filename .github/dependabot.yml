@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # The actions in .github/workflows/ci.yml are pinned to a commit SHA (not just a tag), so
+  # they don't update on their own; Dependabot opens a PR bumping both the SHA and the
+  # version comment next to it whenever a new release comes out.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -12,6 +12,7 @@ jobs:
   test:
     name: test (nvim ${{ matrix.nvim-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -20,19 +21,33 @@ jobs:
         # them -- this project has already run into one such nightly-only behavior change
         # (see lua/scalar-preview/init.lua's jobstart()/pcall comment).
         nvim-version: [v0.10.0, stable, nightly]
+    # nightly is included to catch upstream breakage early, not to gate merging on it: an
+    # unreleased Neovim regressing is not this plugin's bug to block a PR over.
+    continue-on-error: ${{ matrix.nvim-version == 'nightly' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1.6.1
         with:
           neovim: true
           version: ${{ matrix.nvim-version }}
+      # Keyed on the Makefile's own hash, which is where plenary's pinned commit lives, so
+      # bumping that pin (or anything else about how it's fetched) invalidates the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tests/plenary.nvim
+          key: plenary-${{ hashFiles('Makefile') }}
       - run: make test
 
   lint:
     name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: JohnnyMorganz/stylua-action@76fd70c03e6340ceaf673366712db9b20560b402 # v5.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
