@@ -3,6 +3,8 @@ local M = {}
 M.config = {
   port = 8000,
   host = "localhost",
+  cli_version = "latest", -- @scalar/cli version/dist-tag to run, e.g. "2.8.0" to pin it
+  config = nil, -- path to a JSON file with API Reference configuration (CLI's `-c`/`--config`)
 }
 
 M.job_id = nil
@@ -55,6 +57,11 @@ function M.start()
     return
   end
 
+  if M.config.config ~= nil and vim.fn.filereadable(vim.fn.expand(M.config.config)) == 0 then
+    notify_refused("config.config file is not readable: " .. M.config.config, path)
+    return
+  end
+
   -- The preview always reflects what's on disk, not the buffer's in-memory contents, so warn
   -- (but don't block) whenever they can currently differ -- including when :ScalarPreview is
   -- called again on the file it's already previewing, since the warning is about the buffer
@@ -80,13 +87,36 @@ function M.start()
   -- @scalar/cli's watchFile does `path.join(process.cwd(), file)` without checking whether
   -- `file` is already absolute, so an absolute path gets double-prefixed with cwd and always
   -- "does not exist". Run with cwd = the file's own directory and pass just the basename so
-  -- that join produces the right path regardless of Neovim's cwd.
+  -- that join produces the right path regardless of Neovim's cwd. The "./" prefix keeps a
+  -- basename that happens to start with "-" (e.g. "-weird.yaml") from being parsed as a CLI
+  -- flag instead of the file argument.
   local dir = vim.fn.fnamemodify(path, ":h")
-  local basename = vim.fn.fnamemodify(path, ":t")
-  local cmd =
-    string.format("npx --yes @scalar/cli document serve %s -w -p %d", vim.fn.shellescape(basename), M.config.port)
+  local basename = "./" .. vim.fn.fnamemodify(path, ":t")
 
-  local id = vim.fn.jobstart(cmd, {
+  -- A list {cmd} runs the executable directly, with no 'shell' involved, so none of these
+  -- arguments need (or benefit from) shell-escaping -- each one reaches the process exactly
+  -- as given, whatever characters it contains.
+  local cmd = {
+    "npx",
+    "--yes",
+    "@scalar/cli@" .. M.config.cli_version,
+    "document",
+    "serve",
+    basename,
+    "-w",
+    "-p",
+    tostring(M.config.port),
+  }
+  if M.config.config ~= nil then
+    vim.list_extend(cmd, { "-c", vim.fn.expand(M.config.config) })
+  end
+
+  -- jobstart is documented to return -1 if cmd[0] isn't executable, but with a list {cmd}
+  -- some Neovim versions instead raise a hard Lua error for that case (observed: nightly
+  -- v0.13.0-dev raises `E475: ... is not executable` for a cmd[0] not found on $PATH, e.g.
+  -- `npx` missing, instead of returning -1). pcall covers both: a thrown error here is just
+  -- as much "jobstart failed to start" as a -1 return is, handled identically below.
+  local ok, id = pcall(vim.fn.jobstart, cmd, {
     cwd = dir,
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
@@ -165,14 +195,12 @@ function M.start()
     end,
   })
 
-  -- jobstart returns 0 (invalid arguments) or -1 (cmd[0]/'shell' not executable) on failure.
-  -- With a string {cmd} this practically can't happen from a missing `npx` (the shell itself
-  -- starts fine; a missing command surfaces later as a nonzero on_exit), but it can occur if
-  -- the job table is full or 'shell' is misconfigured, and either return value is truthy in
-  -- Lua, so an unguarded assignment below would treat a failed start as a running job id and
-  -- leave an orphaned M.stopped_jobs entry if stop() is ever called for it.
-  if id <= 0 then
-    vim.notify("ScalarPreview: failed to start (jobstart returned " .. id .. ")", vim.log.levels.ERROR)
+  -- A failed jobstart (whether it returned 0/-1 or raised, see above) must not fall through
+  -- to the assignment below: 0 and -1 are both truthy in Lua, so an unguarded assignment
+  -- would treat a failed start as a running job id and leave an orphaned M.stopped_jobs entry
+  -- if stop() is ever called for it.
+  if not ok or id <= 0 then
+    vim.notify("ScalarPreview: failed to start (" .. tostring(id) .. ")", vim.log.levels.ERROR)
     return
   end
 
