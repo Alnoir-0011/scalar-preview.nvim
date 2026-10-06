@@ -14,8 +14,45 @@ M.log_path = vim.fn.stdpath("state") .. "/scalar-preview.log"
 M.warned = false
 M.stderr_tail = ""
 
+-- Checked against `opts` (the caller's partial table), not the merged M.config, so an invalid
+-- field is rejected on its own -- falling back to whatever M.config already had -- without
+-- discarding the rest of an otherwise-valid setup() call.
+local function validate(opts, key, is_valid, expected_description)
+  if opts[key] == nil or is_valid(opts[key]) then
+    return
+  end
+  vim.notify(
+    string.format(
+      "ScalarPreview: ignoring invalid config.%s (expected %s, got %s)",
+      key,
+      expected_description,
+      vim.inspect(opts[key])
+    ),
+    vim.log.levels.ERROR
+  )
+  opts[key] = nil
+end
+
 function M.setup(opts)
-  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+  opts = opts or {}
+  validate(opts, "port", function(v)
+    return type(v) == "number"
+  end, "a number")
+  validate(opts, "host", function(v)
+    return type(v) == "string"
+  end, "a string")
+  -- Anchored to exclude ":" and "/", which would otherwise let this be interpreted not as a
+  -- version/dist-tag but as an entirely different package-arg form (`npm:other-pkg@1.0.0`,
+  -- `github:user/repo`, `file:../elsewhere`, `https://...`) when concatenated after
+  -- "@scalar/cli@" -- confirmed against npm's own npm-package-arg parser.
+  validate(opts, "cli_version", function(v)
+    return type(v) == "string" and v:match("^[%w][%w%.%+%-]*$") ~= nil
+  end, 'a version or dist-tag string (e.g. "2.8.0" or "latest"), not a package-arg like "npm:..."/"github:..."/a URL')
+  validate(opts, "config", function(v)
+    return type(v) == "string"
+  end, "a string (a path) or nil")
+
+  M.config = vim.tbl_deep_extend("force", M.config, opts)
 end
 
 -- If a guard below refuses to (re)start, say so plainly, and if a previous preview is still
@@ -57,8 +94,30 @@ function M.start()
     return
   end
 
-  if M.config.config ~= nil and vim.fn.filereadable(vim.fn.expand(M.config.config)) == 0 then
-    notify_refused("config.config file is not readable: " .. M.config.config, path)
+  -- On Windows, `npx` resolves to `npx.cmd`, a batch file, and CreateProcess implicitly runs
+  -- .cmd/.bat through cmd.exe -- whose argument-splitting and metacharacter rules differ from
+  -- the CommandLineToArgvW-style quoting jobstart's list {cmd} applies (see the Windows note
+  -- under :help jobstart()). `&`, `|`, `^`, `%`, `(`, `)`, `!`, `<`, `>`, `"` are cmd.exe
+  -- syntax that quoting doesn't neutralize, and all of them are valid in a Windows filename,
+  -- so a file with one in its name -- e.g. from an untrusted cloned repo -- could run an
+  -- arbitrary command the moment :ScalarPreview starts. This couldn't happen with the
+  -- previous shellescape()-based string {cmd}, which quoted specifically for cmd.exe, so
+  -- refuse rather than risk it.
+  if vim.fn.has("win32") == 1 and vim.fn.fnamemodify(path, ":t"):match('[&|%^%%%(%)!<>"]') then
+    notify_refused("file name contains characters that aren't safe to pass through cmd.exe on Windows: " .. path, path)
+    return
+  end
+
+  -- Resolved once, to an absolute path, and reused below for both the check and the argv:
+  -- `vim.fn.expand()` would otherwise run the value through Vim's `` ` `` (shell-executes
+  -- its contents) and glob handling, which this plugin has no business doing to a config
+  -- *path*, and a relative path would resolve against two different directories at the two
+  -- places it's used (Neovim's cwd here vs. the job's own cwd -- the previewed file's
+  -- directory, see below -- when actually passed to the CLI), silently pointing the CLI at
+  -- the wrong file. vim.fs.normalize() does neither of those; it only expands "~".
+  local config_path = M.config.config ~= nil and vim.fn.fnamemodify(vim.fs.normalize(M.config.config), ":p") or nil
+  if config_path ~= nil and vim.fn.filereadable(config_path) == 0 then
+    notify_refused("config file is not readable: " .. config_path, path)
     return
   end
 
@@ -107,16 +166,11 @@ function M.start()
     "-p",
     tostring(M.config.port),
   }
-  if M.config.config ~= nil then
-    vim.list_extend(cmd, { "-c", vim.fn.expand(M.config.config) })
+  if config_path ~= nil then
+    vim.list_extend(cmd, { "-c", config_path })
   end
 
-  -- jobstart is documented to return -1 if cmd[0] isn't executable, but with a list {cmd}
-  -- some Neovim versions instead raise a hard Lua error for that case (observed: nightly
-  -- v0.13.0-dev raises `E475: ... is not executable` for a cmd[0] not found on $PATH, e.g.
-  -- `npx` missing, instead of returning -1). pcall covers both: a thrown error here is just
-  -- as much "jobstart failed to start" as a -1 return is, handled identically below.
-  local ok, id = pcall(vim.fn.jobstart, cmd, {
+  local job_opts = {
     cwd = dir,
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
@@ -193,7 +247,14 @@ function M.start()
         M.file_being_previewed = nil
       end
     end,
-  })
+  }
+
+  -- jobstart is documented to return -1 if cmd[0] isn't executable, but with a list {cmd}
+  -- some Neovim versions instead raise a hard Lua error for that case (observed: nightly
+  -- v0.13.0-dev raises `E475: ... is not executable` for a cmd[0] not found on $PATH, e.g.
+  -- `npx` missing, instead of returning -1). pcall covers both: a thrown error here is just
+  -- as much "jobstart failed to start" as a -1 return is, handled identically below.
+  local ok, id = pcall(vim.fn.jobstart, cmd, job_opts)
 
   -- A failed jobstart (whether it returned 0/-1 or raised, see above) must not fall through
   -- to the assignment below: 0 and -1 are both truthy in Lua, so an unguarded assignment
