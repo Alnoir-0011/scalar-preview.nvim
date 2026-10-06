@@ -1,5 +1,7 @@
 # scalar-preview.nvim
 
+[![CI](https://github.com/Alnoir-0011/scalar-preview.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/Alnoir-0011/scalar-preview.nvim/actions/workflows/ci.yml)
+
 Live-reloading OpenAPI/Swagger preview for Neovim, powered by [Scalar CLI](https://github.com/scalar/scalar) (`@scalar/cli`).
 
 Unlike older Swagger-preview plugins built on `swagger-ui-watcher` → `swagger-editor-dist@3.x` (which has no OpenAPI 3.1/3.2 support and throws on `openapi: 3.2.x` documents), this plugin shells out to Scalar's actively maintained CLI, which understands OpenAPI 3.2 (`$self`, `additionalOperations`, etc.).
@@ -10,6 +12,8 @@ Unlike older Swagger-preview plugins built on `swagger-ui-watcher` → `swagger-
 
 - Neovim ≥ 0.10 (uses `vim.ui.open`)
 - Node.js ≥ 24 and `npx` available in `$PATH` (required by `@scalar/cli`)
+
+Run `:checkhealth scalar-preview` to verify both.
 
 ## Installation
 
@@ -62,6 +66,10 @@ require("scalar-preview").setup({
 - If warnings are printed by the underlying CLI, they're written to `stdpath("state") .. "/scalar-preview.log"` instead of flooding Neovim with one notification per line. Warnings from `npm`/`npx` itself (e.g. `EBADENGINE`, deprecated-subdependency notices) are logged but never trigger that notification, since they show up on practically every run and aren't actionable.
 - The preview always reflects the file's contents on disk, not unsaved buffer changes; `:ScalarPreview` warns about this but still starts.
 - On Windows, `npx` resolves to `npx.cmd`, which Windows runs through `cmd.exe` regardless of how this plugin invokes it, so the previewed file *and* the resolved `config` path are both refused outright, rather than risked, if either contains a `cmd.exe` metacharacter (` & | ^ % ( ) ! < > " `) — this plugin can't quote for `cmd.exe` the way the underlying `jobstart()` call quotes for `CommandLineToArgvW`. This caveat is specific to Windows; it doesn't apply on macOS/Linux. (Verified against Neovim's and npm's own documented behavior, not against a real Windows install — please report an issue if you hit something unexpected here.)
+
+## Help
+
+See `:help scalar-preview` for the full command/configuration reference (`doc/scalar-preview.txt`).
 
 ## License
 
