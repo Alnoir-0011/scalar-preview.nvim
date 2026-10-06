@@ -71,4 +71,10 @@ function M.errors(notifications)
   end, notifications)
 end
 
+function M.warnings(notifications)
+  return vim.tbl_filter(function(n)
+    return n.level == vim.log.levels.WARN
+  end, notifications)
+end
+
 return M
