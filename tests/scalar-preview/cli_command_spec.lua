@@ -190,5 +190,30 @@ describe("cli command construction", function()
       assert.are.equal(1, #jobs.started)
       assert.are.equal(0, #stub.errors(notifications))
     end)
+
+    -- Regression test: the guard originally only checked the previewed file's own name, but
+    -- `config_path` reaches argv (as the `-c` value) exactly the same way and goes through
+    -- the same npx.cmd -> cmd.exe path on Windows, so it needed the same check.
+    it("refuses a config path containing a cmd.exe metacharacter", function()
+      local dangerous_config = stub.tempfile("scalar&calc.exe&.config.json")
+      sp.setup({ port = 8000, config = dangerous_config })
+      vim.cmd.edit(file_a)
+
+      sp.start()
+
+      assert.are.equal(0, #jobs.started)
+      assert.are.equal(1, #stub.errors(notifications))
+    end)
+
+    it("still starts normally when config has no cmd.exe metacharacters", function()
+      local config_file = stub.tempfile("scalar.config.json")
+      sp.setup({ port = 8000, config = config_file })
+      vim.cmd.edit(file_a)
+
+      sp.start()
+
+      assert.are.equal(1, #jobs.started)
+      assert.are.equal(0, #stub.errors(notifications))
+    end)
   end)
 end)

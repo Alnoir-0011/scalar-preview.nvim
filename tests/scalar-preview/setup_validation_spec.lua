@@ -100,4 +100,18 @@ describe("setup() validation", function()
     assert.are.equal(9000, sp.config.port)
     assert.are.equal("latest", sp.config.cli_version) -- unaffected by the bad port
   end)
+
+  -- Regression test: validate() originally wrote `opts[key] = nil` back into the caller's
+  -- own table to drop an invalid field before merging. Harmless today (setup() doesn't reuse
+  -- its argument afterwards), but mutating a table the caller still owns is a footgun for
+  -- whoever touches this next -- e.g. a caller that builds `opts` once and passes it to
+  -- setup() more than once, or inspects it afterwards, would see the field vanish.
+  it("does not mutate the opts table passed in, even for an invalid field", function()
+    local opts = { port = 9000, cli_version = false }
+
+    sp.setup(opts)
+
+    assert.are.equal(false, opts.cli_version)
+    assert.are.equal(9000, opts.port)
+  end)
 end)

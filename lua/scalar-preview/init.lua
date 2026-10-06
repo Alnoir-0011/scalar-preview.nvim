@@ -14,45 +14,67 @@ M.log_path = vim.fn.stdpath("state") .. "/scalar-preview.log"
 M.warned = false
 M.stderr_tail = ""
 
--- Checked against `opts` (the caller's partial table), not the merged M.config, so an invalid
--- field is rejected on its own -- falling back to whatever M.config already had -- without
--- discarding the rest of an otherwise-valid setup() call.
+-- Reads `opts[key]` (the caller's partial table) without writing back to it -- `opts` isn't
+-- ours to mutate, and a future caller that reuses its own table across setup() calls would
+-- otherwise see fields silently disappear. Returns the value to actually use: the original
+-- if valid or absent, or nil (meaning "leave M.config's current value alone") if invalid.
 local function validate(opts, key, is_valid, expected_description)
-  if opts[key] == nil or is_valid(opts[key]) then
-    return
+  local value = opts[key]
+  if value == nil or is_valid(value) then
+    return value
   end
   vim.notify(
     string.format(
       "ScalarPreview: ignoring invalid config.%s (expected %s, got %s)",
       key,
       expected_description,
-      vim.inspect(opts[key])
+      vim.inspect(value)
     ),
     vim.log.levels.ERROR
   )
-  opts[key] = nil
+  return nil
 end
 
 function M.setup(opts)
   opts = opts or {}
-  validate(opts, "port", function(v)
-    return type(v) == "number"
-  end, "a number")
-  validate(opts, "host", function(v)
-    return type(v) == "string"
-  end, "a string")
-  -- Anchored to exclude ":" and "/", which would otherwise let this be interpreted not as a
-  -- version/dist-tag but as an entirely different package-arg form (`npm:other-pkg@1.0.0`,
-  -- `github:user/repo`, `file:../elsewhere`, `https://...`) when concatenated after
-  -- "@scalar/cli@" -- confirmed against npm's own npm-package-arg parser.
-  validate(opts, "cli_version", function(v)
-    return type(v) == "string" and v:match("^[%w][%w%.%+%-]*$") ~= nil
-  end, 'a version or dist-tag string (e.g. "2.8.0" or "latest"), not a package-arg like "npm:..."/"github:..."/a URL')
-  validate(opts, "config", function(v)
-    return type(v) == "string"
-  end, "a string (a path) or nil")
+  -- Each of these is either the caller's own (valid) value or nil -- never written into
+  -- `opts` itself -- so assigning it as a table field below either carries it through to the
+  -- vim.tbl_deep_extend() or, for nil, simply never sets that field at all, leaving M.config's
+  -- existing value for it untouched either way.
+  local sanitized = {
+    port = validate(opts, "port", function(v)
+      return type(v) == "number"
+    end, "a number"),
+    host = validate(opts, "host", function(v)
+      return type(v) == "string"
+    end, "a string"),
+    -- Anchored to exclude ":" and "/", which would otherwise let this be interpreted not as a
+    -- version/dist-tag but as an entirely different package-arg form (`npm:other-pkg@1.0.0`,
+    -- `github:user/repo`, `file:../elsewhere`, `https://...`) when concatenated after
+    -- "@scalar/cli@" -- confirmed against npm's own npm-package-arg parser.
+    cli_version = validate(opts, "cli_version", function(v)
+      return type(v) == "string" and v:match("^[%w][%w%.%+%-]*$") ~= nil
+    end, 'a version or dist-tag string (e.g. "2.8.0" or "latest"), not a package-arg like "npm:..."/"github:..."/a URL'),
+    config = validate(opts, "config", function(v)
+      return type(v) == "string"
+    end, "a string (a path) or nil"),
+  }
 
-  M.config = vim.tbl_deep_extend("force", M.config, opts)
+  M.config = vim.tbl_deep_extend("force", M.config, sanitized)
+end
+
+-- On Windows, `npx` resolves to `npx.cmd`, a batch file, and CreateProcess implicitly runs
+-- .cmd/.bat through cmd.exe -- whose argument-splitting and metacharacter rules differ from
+-- the CommandLineToArgvW-style quoting jobstart's list {cmd} applies (see the Windows note
+-- under :help jobstart()). `&`, `|`, `^`, `%`, `(`, `)`, `!`, `<`, `>`, `"` are cmd.exe syntax
+-- that quoting doesn't neutralize, and all of them are valid in a Windows path, so a
+-- previewed file or a configured `config` path with one -- e.g. a file from an untrusted
+-- cloned repo -- could run an arbitrary command the moment :ScalarPreview starts. This
+-- couldn't happen with the previous shellescape()-based string {cmd}, which quoted
+-- specifically for cmd.exe, so refuse rather than risk it. Used for both the previewed
+-- file's basename and the resolved `config` path, since both reach argv the same way.
+local function has_cmd_exe_metachar(s)
+  return vim.fn.has("win32") == 1 and s:match('[&|%^%%%(%)!<>"]') ~= nil
 end
 
 -- If a guard below refuses to (re)start, say so plainly, and if a previous preview is still
@@ -94,16 +116,7 @@ function M.start()
     return
   end
 
-  -- On Windows, `npx` resolves to `npx.cmd`, a batch file, and CreateProcess implicitly runs
-  -- .cmd/.bat through cmd.exe -- whose argument-splitting and metacharacter rules differ from
-  -- the CommandLineToArgvW-style quoting jobstart's list {cmd} applies (see the Windows note
-  -- under :help jobstart()). `&`, `|`, `^`, `%`, `(`, `)`, `!`, `<`, `>`, `"` are cmd.exe
-  -- syntax that quoting doesn't neutralize, and all of them are valid in a Windows filename,
-  -- so a file with one in its name -- e.g. from an untrusted cloned repo -- could run an
-  -- arbitrary command the moment :ScalarPreview starts. This couldn't happen with the
-  -- previous shellescape()-based string {cmd}, which quoted specifically for cmd.exe, so
-  -- refuse rather than risk it.
-  if vim.fn.has("win32") == 1 and vim.fn.fnamemodify(path, ":t"):match('[&|%^%%%(%)!<>"]') then
+  if has_cmd_exe_metachar(vim.fn.fnamemodify(path, ":t")) then
     notify_refused("file name contains characters that aren't safe to pass through cmd.exe on Windows: " .. path, path)
     return
   end
@@ -118,6 +131,14 @@ function M.start()
   local config_path = M.config.config ~= nil and vim.fn.fnamemodify(vim.fs.normalize(M.config.config), ":p") or nil
   if config_path ~= nil and vim.fn.filereadable(config_path) == 0 then
     notify_refused("config file is not readable: " .. config_path, path)
+    return
+  end
+
+  if config_path ~= nil and has_cmd_exe_metachar(config_path) then
+    notify_refused(
+      "config path contains characters that aren't safe to pass through cmd.exe on Windows: " .. config_path,
+      path
+    )
     return
   end
 
