@@ -82,6 +82,20 @@ describe("buffer guards", function()
     assert.are.equal(0, #stub.warnings(notifications))
   end)
 
+  it("says the running preview is unaffected when the previewed file itself becomes unreadable", function()
+    vim.cmd.edit(file_a)
+    sp.start()
+    assert.are.equal(1, #jobs.started)
+
+    vim.fn.delete(file_a) -- e.g. deleted externally, or by `git checkout` of another branch
+    sp.start() -- same buffer, same path -- but it's no longer readable
+
+    local errors = stub.errors(notifications)
+    assert.are.equal(1, #errors)
+    assert.truthy(errors[1].msg:match("unaffected"))
+    assert.falsy(errors[1].msg:match("still running")) -- the generic, different-file wording
+  end)
+
   it("warns again on unsaved changes even when re-invoked on the file already being previewed", function()
     vim.cmd.edit(file_a)
     sp.start()
