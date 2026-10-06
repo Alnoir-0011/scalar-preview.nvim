@@ -13,13 +13,18 @@ function M.install()
     open = vim.ui.open,
   }
 
-  local jobs = { started = {}, stopped = {}, next_failure = nil }
+  local jobs = { started = {}, stopped = {}, next_failure = nil, next_error = nil }
   local notifications = {}
   -- Start well above any id a real jobstart/jobstop call in the same test process could
   -- return, so an assertion can't accidentally match a stray real job id.
   local next_id = 100
 
   vim.fn.jobstart = function(cmd, opts)
+    if jobs.next_error then
+      local err = jobs.next_error
+      jobs.next_error = nil
+      error(err)
+    end
     if jobs.next_failure then
       local failure = jobs.next_failure
       jobs.next_failure = nil
