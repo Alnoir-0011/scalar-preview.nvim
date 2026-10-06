@@ -26,9 +26,21 @@ local function restore_health(originals)
   vim.health.error = originals.error
 end
 
+-- Finds the one entry (if any) whose .msg matches `pattern`, out of `calls.ok` (plain
+-- strings) or `calls.warn`/`calls.error` (tables with a .msg field).
+local function find(entries, pattern)
+  for _, entry in ipairs(entries) do
+    local msg = type(entry) == "string" and entry or entry.msg
+    if msg:match(pattern) then
+      return entry
+    end
+  end
+  return nil
+end
+
 describe("health", function()
   local health
-  local original_executable, original_system
+  local original_executable, original_system, original_version_ge
   local calls, health_originals
 
   before_each(function()
@@ -36,12 +48,23 @@ describe("health", function()
     health = require("scalar-preview.health")
     original_executable = vim.fn.executable
     original_system = vim.fn.system
+    original_version_ge = vim.version.ge
     calls, health_originals = stub_health()
+
+    -- check_neovim_version() is its own, separately-meaningful check (also covered below);
+    -- pinning it to "ok" here keeps every other test's assertions about npx/node isolated
+    -- from whatever vim.version() happens to report in the environment running this suite
+    -- (observed in CI: installing an exact "v0.10.0" can still resolve to a prerelease like
+    -- "0.10.0-dev+g27fb62988", which vim.version.ge() correctly ranks *below* "0.10.0").
+    vim.version.ge = function()
+      return true
+    end
   end)
 
   after_each(function()
     vim.fn.executable = original_executable
     vim.fn.system = original_system
+    vim.version.ge = original_version_ge
     restore_health(health_originals)
   end)
 
@@ -55,7 +78,7 @@ describe("health", function()
     end
   end
 
-  it("reports ok for everything when npx and a new-enough node are both found", function()
+  it("reports ok for npx and a new-enough node", function()
     vim.fn.executable = function(name)
       return (name == "npx" or name == "node") and 1 or 0
     end
@@ -63,7 +86,8 @@ describe("health", function()
 
     health.check()
 
-    assert.are.equal(3, #calls.ok) -- Neovim version, npx, Node.js version
+    assert.truthy(find(calls.ok, "^`npx` found"))
+    assert.truthy(find(calls.ok, "^Node%.js v24%.0%.0"))
     assert.are.same({}, calls.warn)
     assert.are.same({}, calls.error)
   end)
@@ -79,9 +103,9 @@ describe("health", function()
 
     health.check()
 
-    assert.are.equal(1, #calls.error)
-    assert.truthy(calls.error[1].msg:match("^`npx` not found"))
-    assert.truthy(calls.error[1].advice[1]:match("nodejs%.org"))
+    local npx_error = find(calls.error, "^`npx` not found")
+    assert.truthy(npx_error)
+    assert.truthy(npx_error.advice[1]:match("nodejs%.org"))
   end)
 
   it("reports a warning, not an error, when node itself is missing", function()
@@ -91,9 +115,8 @@ describe("health", function()
 
     health.check()
 
-    assert.are.equal(1, #calls.warn)
-    assert.truthy(calls.warn[1].msg:match("^`node` not found"))
-    assert.are.same({}, calls.error)
+    assert.truthy(find(calls.warn, "^`node` not found"))
+    assert.falsy(find(calls.error, "node"))
   end)
 
   it("reports an error when node is found but below the minimum version", function()
@@ -104,8 +127,7 @@ describe("health", function()
 
     health.check()
 
-    assert.are.equal(1, #calls.error)
-    assert.truthy(calls.error[1].msg:match("^Node%.js v18%.0%.0 is below the minimum"))
+    assert.truthy(find(calls.error, "^Node%.js v18%.0%.0 is below the minimum"))
   end)
 
   it("reports a warning when node --version output can't be parsed", function()
@@ -116,9 +138,8 @@ describe("health", function()
 
     health.check()
 
-    assert.are.equal(1, #calls.warn)
-    assert.truthy(calls.warn[1].msg:match("^couldn't parse"))
-    assert.are.same({}, calls.error)
+    assert.truthy(find(calls.warn, "^couldn't parse"))
+    assert.falsy(find(calls.error, "Node%.js"))
   end)
 
   it("reports a warning when node --version itself fails", function()
@@ -129,8 +150,23 @@ describe("health", function()
 
     health.check()
 
-    assert.are.equal(1, #calls.warn)
-    assert.truthy(calls.warn[1].msg:match("^`node %-%-version` failed"))
+    assert.truthy(find(calls.warn, "^`node %-%-version` failed"))
+  end)
+
+  it("reports an error, with upgrade advice, when Neovim itself is below the minimum", function()
+    vim.fn.executable = function(name)
+      return (name == "npx" or name == "node") and 1 or 0
+    end
+    stub_system("v24.0.0\n", true)
+    vim.version.ge = function()
+      return false
+    end
+
+    health.check()
+
+    local nvim_error = find(calls.error, "^Neovim .* is below the minimum of 0%.10")
+    assert.truthy(nvim_error)
+    assert.truthy(nvim_error.advice[2]:match("Upgrade Neovim"))
   end)
 
   -- Regression test: vim.health.start()/ok()/warn()/error() are themselves a Neovim >= 0.10
