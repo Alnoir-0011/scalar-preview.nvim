@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Warms the plenary.nvim cache once, ahead of the test matrix, under the same key all 3 of
+  # its entries use (that key only varies with the Makefile's content, not with
+  # matrix.nvim-version). Without this, a cache miss -- the first run after merge, or
+  # whenever Makefile's PLENARY_REV changes -- has all 3 matrix jobs independently clone
+  # plenary.nvim and then race each other to save it under that identical key: only one save
+  # wins, and the other two clones and upload attempts are pure waste. This job needs no
+  # Neovim at all -- just the Makefile's `.tests/plenary.nvim/.git` target -- so it's cheap
+  # to run unconditionally; `test` then always finds a warm cache to restore from.
+  warm-plenary-cache:
+    name: warm plenary.nvim cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tests/plenary.nvim
+          key: plenary-${{ hashFiles('Makefile') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: make .tests/plenary.nvim/.git
+
+  test:
+    name: test (nvim ${{ matrix.nvim-version }})
+    needs: warm-plenary-cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # v0.10.0 is the plugin's documented minimum (README's "Requirements"); stable and
+        # nightly catch regressions against (or caused by) upstream Neovim before a user hits
+        # them -- this project has already run into one such nightly-only behavior change
+        # (see lua/scalar-preview/init.lua's jobstart()/pcall comment).
+        nvim-version: [v0.10.0, stable, nightly]
+    # nightly is included to catch upstream breakage early, not to gate merging on it: an
+    # unreleased Neovim regressing is not this plugin's bug to block a PR over.
+    continue-on-error: ${{ matrix.nvim-version == 'nightly' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1.6.1
+        with:
+          neovim: true
+          version: ${{ matrix.nvim-version }}
+      # warm-plenary-cache already populated this; restores it rather than cloning again.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tests/plenary.nvim
+          key: plenary-${{ hashFiles('Makefile') }}
+      - run: make test
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: JohnnyMorganz/stylua-action@76fd70c03e6340ceaf673366712db9b20560b402 # v5.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: "2.5.2"
+          args: --check lua tests

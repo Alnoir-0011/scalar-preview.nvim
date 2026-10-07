@@ -1,0 +1,137 @@
+*scalar-preview.txt*     Live-reloading OpenAPI/Swagger preview for Neovim
+
+==============================================================================
+CONTENTS                                             *scalar-preview-contents*
+
+    1. Introduction .......................... |scalar-preview-introduction|
+    2. Requirements .......................... |scalar-preview-requirements|
+    3. Commands .................................. |scalar-preview-commands|
+    4. Configuration ........................ |scalar-preview-configuration|
+    5. Health ...................................... |scalar-preview-health|
+    6. Known limitations ............... |scalar-preview-known-limitations|
+    7. License ...................................... |scalar-preview-license|
+
+==============================================================================
+1. Introduction                                  *scalar-preview-introduction*
+                                                              *scalar-preview*
+
+scalar-preview.nvim starts a local preview server for an OpenAPI/Swagger
+file via Scalar's `@scalar/cli`, and opens it in your browser. The preview
+reloads automatically whenever you save the file.
+
+This plugin shells out to `@scalar/cli` as an external process; it bundles
+no Scalar source and is not affiliated with Scalar. See
+|scalar-preview-license|.
+
+==============================================================================
+2. Requirements                                  *scalar-preview-requirements*
+
+- Neovim >= 0.10 (uses |vim.ui.open()|)
+- Node.js >= 24 and `npx` available on `$PATH` (required by `@scalar/cli`)
+
+Run `:checkhealth scalar-preview` to verify both -- see
+|scalar-preview-health|.
+
+==============================================================================
+3. Commands                                          *scalar-preview-commands*
+
+                                                              *:ScalarPreview*
+:ScalarPreview          Start (or restart, for a different file) the preview
+                         server for the current buffer's file, and open it
+                         in your browser.
+
+                                                          *:ScalarPreviewStop*
+:ScalarPreviewStop      Stop the preview server, if one is running.
+
+                                                        *:ScalarPreviewToggle*
+:ScalarPreviewToggle    Start the preview server if none is running for the
+                         current buffer's file, otherwise stop it.
+
+==============================================================================
+4. Configuration                                *scalar-preview-configuration*
+
+                                                      *scalar-preview.setup()*
+require("scalar-preview").setup({opts})
+
+    Merges {opts} into the plugin's configuration. Calling it is optional;
+    every field below has a default and setup() itself does not need to be
+    called at all if the defaults suit you. A field with an invalid type
+    (or, for |scalar-preview-cli_version|, an invalid shape) is rejected on
+    its own, with a notification explaining why, and falls back to whatever
+    the configuration already had for it -- the rest of a setup() call is
+    unaffected.
+
+    Fields of {opts}: ~
+
+    port        (number, default: `8000`)
+                The local port the preview server listens on.
+
+                                                         *scalar-preview-host*
+    host        (string, default: `"localhost"`)
+                The hostname used to build the URL opened in your browser.
+                This is NOT passed to the underlying CLI, which has no
+                option to control what address it actually binds to -- see
+                |scalar-preview-known-limitations|.
+
+                                                  *scalar-preview-cli_version*
+    cli_version (string, default: `"latest"`)
+                The `@scalar/cli` version or dist-tag to run, e.g. `"2.8.0"`
+                to pin it instead of tracking whatever `"latest"` resolves
+                to on every run. Must look like a bare version/dist-tag
+                (letters, digits, `.`, `+`, `-`); a value containing `:` or
+                `/` (e.g. an `npm:`, `github:`, or `file:` package-arg, or a
+                URL) is rejected, since `@scalar/cli@<that>` would then be
+                resolved as something other than a version of `@scalar/cli`
+                itself.
+
+                                                       *scalar-preview-config*
+    config      (string or nil, default: `nil`)
+                Path to a JSON file with API Reference configuration
+                (theme, layout, ...; see `@scalar/cli`'s own docs for its
+                shape), passed to the CLI as `-c`/`--config`. A relative
+                path is resolved once, to an absolute path, before use.
+
+    Example: >lua
+        require("scalar-preview").setup({
+          port = 8080,
+          cli_version = "2.8.0",
+        })
+<
+
+==============================================================================
+5. Health                                              *scalar-preview-health*
+
+Run: >vim
+    :checkhealth scalar-preview
+<
+to check that Neovim's version, `npx`, and Node.js's version all satisfy
+|scalar-preview-requirements|.
+
+==============================================================================
+6. Known limitations                        *scalar-preview-known-limitations*
+
+- Only preview specs you trust. `@scalar/cli` resolves every `$ref` in the
+  document -- including ones pointing outside its directory on the local
+  filesystem, and ones pointing at an `http(s)://` URL -- and embeds what
+  it finds into the page it serves.
+- The underlying server listens on all network interfaces, both IPv4 and
+  IPv6, not just `localhost`, with no CLI flag to restrict this.
+- With the default `cli_version = "latest"`, the exact `@scalar/cli`
+  version that runs isn't pinned and can change between runs.
+- On Windows, a previewed file or a configured |scalar-preview-config|
+  path containing a `cmd.exe` metacharacter (` & | ^ % ( ) ! < > " `) is
+  refused outright, since `npx` runs through `cmd.exe` there regardless of
+  how this plugin invokes it.
+
+See the README for the full, up-to-date list and the reasoning behind each
+one: https://github.com/Alnoir-0011/scalar-preview.nvim#known-limitations
+
+==============================================================================
+7. License                                            *scalar-preview-license*
+
+MIT. See the LICENSE file. This plugin invokes `@scalar/cli` (MIT License)
+as an external process via `npx`; no Scalar source is bundled or
+redistributed, and this project is not affiliated with Scalar.
+
+==============================================================================
+vim:tw=78:ts=8:noet:ft=help:norl:
