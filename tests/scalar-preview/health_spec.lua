@@ -119,6 +119,33 @@ describe("health", function()
     assert.falsy(find(calls.error, "node"))
   end)
 
+  -- Regression test: vim.fn.system() merges stderr into the captured output (verified
+  -- separately against the real vim.fn.system()), so a banner a shim/wrapper/deprecation
+  -- notice writes to stderr ahead of the actual version line must not make this look
+  -- unparseable.
+  it("still finds the version when it's preceded by stderr noise merged into the output", function()
+    vim.fn.executable = function(name)
+      return (name == "npx" or name == "node") and 1 or 0
+    end
+    stub_system("(node:12345) ExperimentalWarning: some feature is experimental\nv24.0.0\n", true)
+
+    health.check()
+
+    assert.truthy(find(calls.ok, "^Node%.js v24%.0%.0"))
+    assert.are.same({}, calls.warn)
+  end)
+
+  it("does not mistake a noise line merely containing something like 'v8' for the version", function()
+    vim.fn.executable = function(name)
+      return (name == "npx" or name == "node") and 1 or 0
+    end
+    stub_system("Compiled with V8 v8.1 (unrelated banner)\nv24.0.0\n", true)
+
+    health.check()
+
+    assert.truthy(find(calls.ok, "^Node%.js v24%.0%.0"))
+  end)
+
   it("reports an error when node is found but below the minimum version", function()
     vim.fn.executable = function(name)
       return (name == "npx" or name == "node") and 1 or 0

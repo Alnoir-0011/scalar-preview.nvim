@@ -42,21 +42,34 @@ local function check_node_version()
     return
   end
 
-  local major = tonumber(output:match("^v(%d+)"))
-  if major == nil then
+  -- vim.fn.system() merges stderr into the same string as stdout (confirmed: a command that
+  -- writes to both interleaves them in the result), and node --version's own output is just
+  -- "vX.Y.Z" -- but something else on $PATH ahead of it in the resolution (an nvm/fnm/volta
+  -- shim, an NODE_OPTIONS/ExperimentalWarning banner, a corporate AV wrapper, ...) can still
+  -- write a line to stderr before it prints the version. Scan line by line for the one
+  -- that's just a bare version, instead of anchoring to the very first character of
+  -- (possibly noisy) `output` as a whole, so a banner ahead of it doesn't produce a false
+  -- "couldn't parse" warning for an otherwise perfectly fine, new-enough Node.
+  local version_line
+  for line in output:gmatch("[^\r\n]+") do
+    if line:match("^v%d+[%d.]*$") then
+      version_line = line
+      break
+    end
+  end
+
+  if version_line == nil then
     vim.health.warn("couldn't parse `node --version` output: " .. vim.inspect(output))
     return
   end
 
+  local major = tonumber(version_line:match("^v(%d+)"))
+
   if major >= MIN_NODE_MAJOR then
-    vim.health.ok("Node.js " .. output:gsub("%s+$", "") .. " (>= " .. MIN_NODE_MAJOR .. " required by @scalar/cli)")
+    vim.health.ok("Node.js " .. version_line .. " (>= " .. MIN_NODE_MAJOR .. " required by @scalar/cli)")
   else
     vim.health.error(
-      "Node.js "
-        .. output:gsub("%s+$", "")
-        .. " is below the minimum of "
-        .. MIN_NODE_MAJOR
-        .. " required by @scalar/cli",
+      "Node.js " .. version_line .. " is below the minimum of " .. MIN_NODE_MAJOR .. " required by @scalar/cli",
       { "Upgrade Node.js to " .. MIN_NODE_MAJOR .. " or later: https://nodejs.org/" }
     )
   end

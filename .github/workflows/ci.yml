@@ -9,8 +9,33 @@ permissions:
   contents: read
 
 jobs:
+  # Warms the plenary.nvim cache once, ahead of the test matrix, under the same key all 3 of
+  # its entries use (that key only varies with the Makefile's content, not with
+  # matrix.nvim-version). Without this, a cache miss -- the first run after merge, or
+  # whenever Makefile's PLENARY_REV changes -- has all 3 matrix jobs independently clone
+  # plenary.nvim and then race each other to save it under that identical key: only one save
+  # wins, and the other two clones and upload attempts are pure waste. This job needs no
+  # Neovim at all -- just the Makefile's `.tests/plenary.nvim/.git` target -- so it's cheap
+  # to run unconditionally; `test` then always finds a warm cache to restore from.
+  warm-plenary-cache:
+    name: warm plenary.nvim cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tests/plenary.nvim
+          key: plenary-${{ hashFiles('Makefile') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: make .tests/plenary.nvim/.git
+
   test:
     name: test (nvim ${{ matrix.nvim-version }})
+    needs: warm-plenary-cache
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -32,8 +57,7 @@ jobs:
         with:
           neovim: true
           version: ${{ matrix.nvim-version }}
-      # Keyed on the Makefile's own hash, which is where plenary's pinned commit lives, so
-      # bumping that pin (or anything else about how it's fetched) invalidates the cache.
+      # warm-plenary-cache already populated this; restores it rather than cloning again.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .tests/plenary.nvim
