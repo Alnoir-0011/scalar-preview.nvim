@@ -130,8 +130,9 @@ describe("stderr filtering", function()
     sp.start() -- restarts: stops job A, starts job B
     local job_b = jobs.started[2]
 
-    -- Job A's lingering stderr arrives late (jobstop() sends SIGTERM and returns without
-    -- waiting, so the old process's stdio may still be open when the new one's output starts).
+    -- Job A's lingering stderr arrives late (jobstop() sends SIGTERM, escalating to SIGKILL
+    -- after a timeout, and returns without waiting, so the old process's stdio may still be
+    -- open when the new one's output starts).
     job_a.opts.on_stderr(job_a.id, { "a real warning from the old job", "" })
 
     assert.are.same({}, stub.warnings(notifications))

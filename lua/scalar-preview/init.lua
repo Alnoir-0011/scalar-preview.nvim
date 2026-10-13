@@ -212,12 +212,12 @@ function M.start()
     -- else from npm, e.g. `npm warn tarball ... corrupted`, still does, since blanket-ignoring
     -- every `npm warn` line would silently swallow ones actually worth seeing.
     on_stderr = function(id, data)
-      -- Ignore a stale job: jobstop() sends SIGTERM and returns without waiting for the
-      -- job to exit, so a fast restart (switching the file being previewed) can have the old
-      -- job's trailing stderr arrive after M.job_id already points at the new job. Without
-      -- this check, M.warned and the just-truncated M.log_path (see M.start()) would end up
-      -- mixing the old and new jobs' output and incorrectly suppressing/triggering the new
-      -- job's own notification.
+      -- Ignore a stale job: jobstop() sends SIGTERM (escalating to SIGKILL after a
+      -- timeout) and returns without waiting for the job to exit, so a fast restart
+      -- (switching the file being previewed) can have the old job's trailing stderr arrive
+      -- after M.job_id already points at the new job. Without this check, M.warned and the
+      -- just-truncated M.log_path (see M.start()) would end up mixing the old and new jobs'
+      -- output and incorrectly suppressing/triggering the new job's own notification.
       if id ~= M.job_id then
         return
       end
