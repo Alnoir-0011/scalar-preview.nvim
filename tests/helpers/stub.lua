@@ -34,9 +34,10 @@ function M.install()
     table.insert(jobs.started, { id = next_id, cmd = cmd, opts = opts })
     return next_id
   end
-  -- The real jobstop() only sends SIGTERM; on_exit still arrives later, asynchronously, via
-  -- the job's own on_exit callback. This stub mirrors that split: it just records the call,
-  -- so specs must invoke `job.opts.on_exit(job.id, code)` themselves to simulate the exit.
+  -- The real jobstop() sends SIGTERM (escalating to SIGKILL after a timeout) and returns
+  -- without waiting; on_exit arrives later, asynchronously, via the job's own on_exit
+  -- callback. This stub mirrors that split: it just records the call, so specs must invoke
+  -- `job.opts.on_exit(job.id, code)` themselves to simulate the exit.
   vim.fn.jobstop = function(id)
     table.insert(jobs.stopped, id)
     return 1

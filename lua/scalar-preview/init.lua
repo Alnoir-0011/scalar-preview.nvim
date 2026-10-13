@@ -67,12 +67,14 @@ end
 -- .cmd/.bat through cmd.exe -- whose argument-splitting and metacharacter rules differ from
 -- the CommandLineToArgvW-style quoting jobstart's list {cmd} applies (see the Windows note
 -- under :help jobstart()). `&`, `|`, `^`, `%`, `(`, `)`, `!`, `<`, `>`, `"` are cmd.exe syntax
--- that quoting doesn't neutralize, and all of them are valid in a Windows path, so a
--- previewed file or a configured `config` path with one -- e.g. a file from an untrusted
--- cloned repo -- could run an arbitrary command the moment :ScalarPreview starts. This
--- couldn't happen with the previous shellescape()-based string {cmd}, which quoted
--- specifically for cmd.exe, so refuse rather than risk it. Used for both the previewed
--- file's basename and the resolved `config` path, since both reach argv the same way.
+-- that reaches it unneutralized. `&`, `^`, `%`, `(`, `)`, `!` are valid in a Windows file
+-- name, and `&` alone is enough for a previewed file or a configured `config` path -- e.g. a
+-- file from an untrusted cloned repo -- to run an arbitrary command the moment
+-- :ScalarPreview starts; `|`, `<`, `>`, `"` can't appear in a file name, but are rejected by
+-- the same rule rather than special-cased. Quoting by hand instead can't be made safe:
+-- double quotes don't stop cmd.exe from expanding `%` (or `!` under delayed expansion), so
+-- refuse rather than risk it. Used for both the previewed file's basename and the resolved
+-- `config` path, since both reach argv the same way.
 local function has_cmd_exe_metachar(s)
   return vim.fn.has("win32") == 1 and s:match('[&|%^%%%(%)!<>"]') ~= nil
 end
@@ -210,12 +212,12 @@ function M.start()
     -- else from npm, e.g. `npm warn tarball ... corrupted`, still does, since blanket-ignoring
     -- every `npm warn` line would silently swallow ones actually worth seeing.
     on_stderr = function(id, data)
-      -- Ignore a stale job: jobstop() only sends SIGTERM and doesn't guarantee immediate
-      -- termination, so a fast restart (switching the file being previewed) can have the old
-      -- job's trailing stderr arrive after M.job_id already points at the new job. Without
-      -- this check, M.warned and the just-truncated M.log_path (see M.start()) would end up
-      -- mixing the old and new jobs' output and incorrectly suppressing/triggering the new
-      -- job's own notification.
+      -- Ignore a stale job: jobstop() sends SIGTERM (escalating to SIGKILL after a
+      -- timeout) and returns without waiting for the job to exit, so a fast restart
+      -- (switching the file being previewed) can have the old job's trailing stderr arrive
+      -- after M.job_id already points at the new job. Without this check, M.warned and the
+      -- just-truncated M.log_path (see M.start()) would end up mixing the old and new jobs'
+      -- output and incorrectly suppressing/triggering the new job's own notification.
       if id ~= M.job_id then
         return
       end
@@ -223,9 +225,9 @@ function M.start()
       -- on_stderr's `data` may split a single line across multiple calls, so a line like
       -- "npm warn EBADENGINE ..." could otherwise arrive as "npm wa" then "rn EBADENGINE ...",
       -- with the first half failing the `npm warn` match below and wrongly triggering the
-      -- notification. Per :help channel-lines: every element but the last in `data` is a
-      -- complete line; the last one may still be partial unless this call is EOF (`data` is
-      -- exactly `{ "" }`), so only the confirmed-complete ones are processed each time.
+      -- notification. Per :help channel-lines the first and last elements of `data` may be
+      -- partial, so the first is joined onto M.stderr_tail and the last is held back unless
+      -- this call is EOF (`data` is exactly `{ "" }`).
       local eof = #data == 1 and data[1] == ""
       data = { M.stderr_tail .. data[1], unpack(data, 2) }
       local complete_lines = data
@@ -254,9 +256,9 @@ function M.start()
     -- on_exit fires asynchronously, so after a restart the old job's exit can arrive once
     -- the new job is already running. Only clear state that still belongs to this job. We
     -- suppress the error notification purely based on whether *we* called stop() for this
-    -- job id, not the exit code (SIGTERM is 143 on POSIX, but jobstop()'s behavior on
-    -- Windows isn't guaranteed to match), so a deliberate stop never reports as a failure
-    -- regardless of platform.
+    -- job id, not the exit code (SIGTERM is reported as 143 on Unix-like systems, but
+    -- jobstop()'s behavior on Windows isn't guaranteed to match), so a deliberate stop never
+    -- reports as a failure regardless of platform.
     on_exit = function(id, code)
       local stopped = M.stopped_jobs[id]
       M.stopped_jobs[id] = nil
@@ -270,11 +272,9 @@ function M.start()
     end,
   }
 
-  -- jobstart is documented to return -1 if cmd[0] isn't executable, but with a list {cmd}
-  -- some Neovim versions instead raise a hard Lua error for that case (observed: nightly
-  -- v0.13.0-dev raises `E475: ... is not executable` for a cmd[0] not found on $PATH, e.g.
-  -- `npx` missing, instead of returning -1). pcall covers both: a thrown error here is just
-  -- as much "jobstart failed to start" as a -1 return is, handled identically below.
+  -- jobstart is documented to return -1 if cmd[0] isn't executable, but called through
+  -- vim.fn, as here, it raises that failure (`E475: ... is not executable`, e.g. `npx`
+  -- missing from $PATH) as a Lua error instead, so checking only for -1 would never see it.
   local ok, id = pcall(vim.fn.jobstart, cmd, job_opts)
 
   -- A failed jobstart (whether it returned 0/-1 or raised, see above) must not fall through
