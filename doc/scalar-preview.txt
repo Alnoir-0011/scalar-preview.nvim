@@ -120,13 +120,15 @@ to check that Neovim's version, `npx`, and Node.js's version all satisfy
   version that runs isn't pinned and can change between runs.
 - `npx` runs in the previewed file's directory and looks for an already
   installed `@scalar/cli` in the nearest `node_modules` at or above it (the
-  closest directory with a `package.json` or `node_modules`). If that
-  copy's own `package.json` claims a matching version -- the exact
-  |scalar-preview-cli_version|, a range such as `7.x`, or the current
-  `latest` -- `npx` runs it instead of downloading from the registry, so
-  pinning does not rule this out. A `.npmrc` in that same directory can
-  also point `npx` at a different registry. Don't preview specs inside a
-  checkout you don't trust.
+  closest directory with a `package.json` or `node_modules`); the search
+  stops there and doesn't look further up. If that copy's own
+  `package.json` claims a matching version -- the exact
+  |scalar-preview-cli_version|, or a range such as `7.x` -- `npx` runs it
+  instead of downloading from the registry, so pinning does not rule this
+  out. For `latest`, the same happens when the copy's `package.json` has a
+  `resolved` equal to `latest`'s current tarball URL. A `.npmrc` in that
+  same directory can also point `npx` at a different registry. Don't
+  preview specs inside a checkout you don't trust.
 - On Windows, a previewed file or a configured |scalar-preview-config|
   path containing a `cmd.exe` metacharacter (` & | ^ % ( ) ! < > " `) is
   refused outright, since `npx` runs through `cmd.exe` there regardless of
