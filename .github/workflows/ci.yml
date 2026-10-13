@@ -41,10 +41,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # v0.10.0 is the plugin's documented minimum (README's "Requirements"); stable and
+        # v0.10.0 is the plugin's documented minimum (README's "Requirements"), but
+        # rhysd/action-setup-vim installs a "0.10.0-dev+..." prerelease build, not the 0.10.0
+        # release, so this entry only approximates the minimum (vim.version.ge() ranks that
+        # prerelease below 0.10.0; see tests/scalar-preview/health_spec.lua). stable and
         # nightly catch regressions against (or caused by) upstream Neovim before a user hits
-        # them -- this project has already run into one such nightly-only behavior change
-        # (see lua/scalar-preview/init.lua's jobstart()/pcall comment).
+        # them.
         nvim-version: [v0.10.0, stable, nightly]
     # nightly is included to catch upstream breakage early, not to gate merging on it: an
     # unreleased Neovim regressing is not this plugin's bug to block a PR over.

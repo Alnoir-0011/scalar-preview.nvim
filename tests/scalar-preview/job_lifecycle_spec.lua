@@ -122,9 +122,6 @@ describe("job lifecycle", function()
     assert.is_nil(sp.file_being_previewed)
   end)
 
-  -- Some Neovim versions raise a Lua error from jobstart (observed: nightly v0.13.0-dev, for
-  -- a list {cmd} whose cmd[0] -- e.g. `npx` -- isn't on $PATH) instead of returning -1 for
-  -- that same failure, so this must be handled the same way as the -1 case above.
   it("reports an error and does not start a job when jobstart raises an error", function()
     vim.cmd.edit(file_a)
     jobs.next_error = "Vim:E475: Invalid value for argument cmd: 'npx' is not executable"
