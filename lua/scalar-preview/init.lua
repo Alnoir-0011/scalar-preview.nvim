@@ -299,14 +299,24 @@ function M.start()
   -- NODE_OPTIONS is the one hook that reaches the node process npx spawns for it. The user's
   -- own NODE_OPTIONS is appended to rather than replaced, since jobstart's `env` overrides
   -- the inherited value outright.
+  --
+  -- npm_config_node_options is set to the same value because npm, whenever a `node-options`
+  -- setting exists in any .npmrc (including one in the previewed file's own directory tree)
+  -- replaces NODE_OPTIONS with it for the processes it spawns, which would silently drop the
+  -- preload and leave the server on every interface. An environment variable outranks the
+  -- .npmrc layers, so this one wins; the cost is that a `node-options` the user keeps in an
+  -- .npmrc is not applied to the preview. Reading it back out of npm to merge it in would
+  -- mean reimplementing npm's config resolution.
   if M.config.bind ~= nil then
     local import_flag = "--import=" .. BIND_PRELOAD_URL
     local user_node_options = vim.env.NODE_OPTIONS
+    local node_options = (user_node_options ~= nil and user_node_options ~= "")
+        and (user_node_options .. " " .. import_flag)
+      or import_flag
     job_opts.env = {
       SCALAR_PREVIEW_BIND_HOST = M.config.bind,
-      NODE_OPTIONS = (user_node_options ~= nil and user_node_options ~= "")
-          and (user_node_options .. " " .. import_flag)
-        or import_flag,
+      NODE_OPTIONS = node_options,
+      npm_config_node_options = node_options,
     }
   end
 

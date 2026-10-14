@@ -90,7 +90,12 @@ require("scalar-preview").setup({opts})
 
                 `@scalar/cli` has no option for this, so the plugin starts it
                 with `NODE_OPTIONS=--import=<scripts/bind-loopback.mjs>`,
-                keeping any `NODE_OPTIONS` you already have. The script
+                keeping a `NODE_OPTIONS` from your environment. A
+                `node-options` setting in an `.npmrc` is not applied to the
+                preview while `bind` is set: npm would replace
+                `NODE_OPTIONS` with it and drop the script, so the plugin
+                also sets `npm_config_node_options`, which takes precedence
+                over every `.npmrc`. The script
                 stops the server with an error if it ends up listening on any
                 other address. Verified on macOS with Node 25 and
                 `@scalar/cli` 2.11.0; not verified on Windows.

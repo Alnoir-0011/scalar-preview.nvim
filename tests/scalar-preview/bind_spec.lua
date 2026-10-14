@@ -54,6 +54,14 @@ describe("bind option", function()
     assert.truthy(job.opts.env.NODE_OPTIONS:find("--import=", 1, true))
   end)
 
+  it("hands npm the same NODE_OPTIONS through npm_config_node_options", function()
+    vim.env.NODE_OPTIONS = "--max-old-space-size=512"
+
+    local job = start_with({ port = 8000, bind = "127.0.0.1" })
+
+    assert.are.equal(job.opts.env.NODE_OPTIONS, job.opts.env.npm_config_node_options)
+  end)
+
   it("does not put the bind address on the command line", function()
     local job = start_with({ port = 8000, bind = "127.0.0.1" })
 

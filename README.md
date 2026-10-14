@@ -87,7 +87,7 @@ By default the preview server is reachable from every device on your network (se
 
 If `bind` is invalid (not a string, empty, or a hostname such as `"localhost"`), the plugin reports an error and **ignores it, so the server listens on all network interfaces**, exactly as if `bind` were unset. If the address is well-formed but not one of your machine's, the CLI fails to start and the usual `ScalarPreview exited with code …` error appears.
 
-How it works: `@scalar/cli` has no option for the address it listens on, so when `bind` is set the plugin starts it with `NODE_OPTIONS=--import=<scripts/bind-loopback.mjs>`. That script makes Node bind to your address, and stops the server with an error if it ends up listening anywhere else. Any `NODE_OPTIONS` you already have are kept. This relies on `NODE_OPTIONS` reaching the Node process that `npx` starts; that was verified on macOS with Node 25 and `@scalar/cli` 2.11.0, and not on Windows or Linux outside CI.
+How it works: `@scalar/cli` has no option for the address it listens on, so when `bind` is set the plugin starts it with `NODE_OPTIONS=--import=<scripts/bind-loopback.mjs>`. That script makes Node bind to your address, and stops the server with an error if it ends up listening anywhere else. A `NODE_OPTIONS` in your environment is kept. A `node-options` setting in an `.npmrc` is not applied to the preview while `bind` is set: npm would otherwise replace `NODE_OPTIONS` with it and silently drop the script, so the plugin also sets `npm_config_node_options`, which takes precedence over every `.npmrc`. This relies on `NODE_OPTIONS` reaching the Node process that `npx` starts; that was verified on macOS with Node 25 and `@scalar/cli` 2.11.0, and not on Windows or Linux outside CI.
 
 ## Known limitations
 
