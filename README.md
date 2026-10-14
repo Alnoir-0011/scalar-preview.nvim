@@ -46,8 +46,10 @@ This starts a local preview server via `npx @scalar/cli document serve --watch` 
 require("scalar-preview").setup({
   port = 8000,         -- default: 8000
   host = "localhost",  -- default: "localhost", the hostname used to build the URL that's
-                        -- opened in your browser; it is NOT passed to the CLI (which has no
-                        -- option to control what address it binds to — see "Known limitations").
+                        -- opened in your browser; it does NOT control who can connect — use
+                        -- `bind` for that (see "Restricting who can reach the preview").
+  bind = nil,          -- default: nil (reachable from your whole network). Set to "127.0.0.1"
+                        -- so only this machine can reach the preview.
   cli_version = "latest", -- default: "latest". @scalar/cli version (or dist-tag) to run, e.g.
                            -- "2.8.0" to pin it instead of tracking whatever "latest" resolves
                            -- to on each run.
@@ -57,10 +59,40 @@ require("scalar-preview").setup({
 })
 ```
 
+### Restricting who can reach the preview
+
+By default the preview server is reachable from every device on your network (see "Known limitations"). If you only need to view it on this machine, add one line:
+
+```lua
+{
+  "Alnoir-0011/scalar-preview.nvim",
+  cmd = { "ScalarPreview", "ScalarPreviewStop", "ScalarPreviewToggle" },
+  opts = {
+    bind = "127.0.0.1", -- only this machine can reach the preview
+  },
+}
+```
+
+`bind` takes an IP address (not a hostname):
+
+| `bind` | Listens on | Reachable from | When to use |
+|---|---|---|---|
+| unset (default) | every interface, IPv4 and IPv6 | your whole network | You want to open the preview from another device |
+| `"127.0.0.1"` | IPv4 loopback only | this machine only | **Most setups** |
+| `"::1"` | IPv6 loopback only | this machine only | You specifically want IPv6 loopback |
+| `"0.0.0.0"` | every IPv4 interface | your whole network | A container where the forwarded port must be bound to all interfaces |
+| your LAN address, e.g. `"192.168.1.20"` | that one interface | the network that interface is on | You want to expose it to one network only |
+
+`host` and `bind` do different jobs: `host` only builds the URL opened in your browser, while `bind` decides who can connect. With `bind = "127.0.0.1"` you can leave `host = "localhost"` as it is.
+
+If `bind` is invalid (not a string, empty, or a hostname such as `"localhost"`), the plugin reports an error and **ignores it, so the server listens on all network interfaces**, exactly as if `bind` were unset. If the address is well-formed but not one of your machine's, the CLI fails to start and the usual `ScalarPreview exited with code …` error appears.
+
+How it works: `@scalar/cli` has no option for the address it listens on, so when `bind` is set the plugin starts it with `NODE_OPTIONS=--import=<scripts/bind-loopback.mjs>`. That script makes Node bind to your address, and stops the server with an error if it ends up listening anywhere else. Any `NODE_OPTIONS` you already have are kept. This relies on `NODE_OPTIONS` reaching the Node process that `npx` starts; that was verified on macOS with Node 25 and `@scalar/cli` 2.11.0, and not on Windows or Linux outside CI.
+
 ## Known limitations
 
 - **Only preview specs you trust.** `@scalar/cli` resolves every `$ref` in the document — including ones pointing outside its directory on the local filesystem, and ones pointing at an `http(s)://` URL — and embeds what it finds into the page it serves. A spec from an untrusted source can use this to have the preview server expose the contents of any other local file your user can read (as long as it parses as YAML/JSON) and/or make it send a request to an attacker-controlled URL, revealing that the spec was opened. This is `@scalar/cli`'s own behavior; this plugin has no way to sandbox or restrict it.
-- The underlying server (`@scalar/cli document serve`) listens on all network interfaces, both IPv4 and IPv6 (`0.0.0.0` and `::`) — not just `localhost` — and the CLI has no flag to restrict this. Anything reachable on your network can view whatever you're previewing while the server is running. Run `:ScalarPreviewStop` when you're done, especially on an untrusted network.
+- **By default the preview is reachable from your whole network.** The underlying server (`@scalar/cli document serve`) listens on all network interfaces, both IPv4 and IPv6 (`0.0.0.0` and `::`) — not just `localhost` — and the CLI has no flag to restrict this. Anything reachable on your network can view whatever you're previewing while the server is running. Set `bind = "127.0.0.1"` (see "Restricting who can reach the preview") to limit it to this machine, and run `:ScalarPreviewStop` when you're done, especially on an untrusted network. `bind` is off by default so that existing setups that open the preview from another device keep working.
 - The first `:ScalarPreview` run may take a few seconds while `npx` fetches `@scalar/cli`; it's cached after that.
 - With the default `cli_version = "latest"`, the exact version of `@scalar/cli` that runs isn't pinned and can change between runs whenever a new version is published upstream — `npx` fetches and runs whatever "latest" currently resolves to, with no confirmation prompt (`--yes`). Set `cli_version` to a specific version (e.g. `"2.8.0"`) to pin it instead. Pinning a version doesn't guarantee its integrity (there's no hash check); it only stops it from silently changing between runs.
 - `npx` runs in the previewed file's directory and looks for an already-installed `@scalar/cli` in the nearest `node_modules` at or above it (the closest directory that has a `package.json` or `node_modules`); the search stops at that directory and doesn't look further up. If that copy's own `package.json` claims a matching version — the exact `cli_version`, or a range such as `7.x` — `npx` runs it instead of downloading from the registry, so pinning `cli_version` does not rule this out. For `latest`, the same happens when the copy's `package.json` has a `resolved` equal to `latest`'s current tarball URL. A `.npmrc` in that same directory can also point `npx` at a different registry. This is `npm`/`npx`'s own resolution, outside this plugin's control. Don't preview specs inside a checkout you don't trust.
