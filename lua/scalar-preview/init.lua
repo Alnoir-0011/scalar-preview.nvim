@@ -18,22 +18,38 @@ M.stderr_tail = ""
 -- ours to mutate, and a future caller that reuses its own table across setup() calls would
 -- otherwise see fields silently disappear. Returns the value to actually use: the original
 -- if valid or absent, or nil (meaning "leave M.config's current value alone") if invalid.
-local function validate(opts, key, is_valid, expected_description)
+local function validate(opts, key, is_valid, expected_description, consequence)
   local value = opts[key]
   if value == nil or is_valid(value) then
     return value
   end
   vim.notify(
     string.format(
-      "ScalarPreview: ignoring invalid config.%s (expected %s, got %s)",
+      "ScalarPreview: ignoring invalid config.%s (expected %s, got %s)%s",
       key,
       expected_description,
-      vim.inspect(value)
+      vim.inspect(value),
+      consequence and ("; " .. consequence) or ""
     ),
     vim.log.levels.ERROR
   )
   return nil
 end
+
+-- Only a coarse check: the preload script's own net.isIP() is what actually decides. A
+-- hostname such as "localhost" is refused here too, because the preload's post-bind check
+-- compares addresses and a name would never match what the server reports.
+local function looks_like_ip_address(value)
+  if type(value) ~= "string" then
+    return false
+  end
+  return value:match("^%d+%.%d+%.%d+%.%d+$") ~= nil
+    or (value:find(":", 1, true) ~= nil and value:match("^[%x:%.]+$") ~= nil)
+end
+
+local BIND_PRELOAD_URL = vim.uri_from_fname(
+  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h") .. "/scripts/bind-loopback.mjs"
+)
 
 function M.setup(opts)
   opts = opts or {}
@@ -58,6 +74,13 @@ function M.setup(opts)
     config = validate(opts, "config", function(v)
       return type(v) == "string"
     end, "a string (a path) or nil"),
+    bind = validate(
+      opts,
+      "bind",
+      looks_like_ip_address,
+      'an IP address string such as "127.0.0.1"',
+      "the server will listen on all network interfaces"
+    ),
   }
 
   M.config = vim.tbl_deep_extend("force", M.config, sanitized)
@@ -271,6 +294,21 @@ function M.start()
       end
     end,
   }
+
+  -- Passed through the environment instead of argv: the CLI has no flag to carry it, and
+  -- NODE_OPTIONS is the one hook that reaches the node process npx spawns for it. The user's
+  -- own NODE_OPTIONS is appended to rather than replaced, since jobstart's `env` overrides
+  -- the inherited value outright.
+  if M.config.bind ~= nil then
+    local import_flag = "--import=" .. BIND_PRELOAD_URL
+    local user_node_options = vim.env.NODE_OPTIONS
+    job_opts.env = {
+      SCALAR_PREVIEW_BIND_HOST = M.config.bind,
+      NODE_OPTIONS = (user_node_options ~= nil and user_node_options ~= "")
+          and (user_node_options .. " " .. import_flag)
+        or import_flag,
+    }
+  end
 
   -- jobstart is documented to return -1 if cmd[0] isn't executable, but called through
   -- vim.fn, as here, it raises that failure (`E475: ... is not executable`, e.g. `npx`
