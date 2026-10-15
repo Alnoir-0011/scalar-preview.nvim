@@ -12,6 +12,11 @@ local function run_node(code, env)
   return result.code, vim.trim(result.stdout), result.stderr
 end
 
+local function last_line(stdout)
+  local lines = vim.split(stdout, "\n", { plain = true })
+  return lines[#lines]
+end
+
 local function print_bound_address(listen_args)
   return string.format(
     [[const s = require("http").createServer(); s.listen(%s, () => { console.log(s.address().address); s.close(); });]],
@@ -24,7 +29,7 @@ describe("bind preload", function()
     local code, stdout = run_node(print_bound_address("0"), { SCALAR_PREVIEW_BIND_HOST = "127.0.0.1" })
 
     assert.are.equal(0, code)
-    assert.are.equal("127.0.0.1", stdout)
+    assert.are.equal("127.0.0.1", last_line(stdout))
   end)
 
   node_it("replaces an explicit all-interfaces host with the bind address", function()
@@ -32,7 +37,7 @@ describe("bind preload", function()
       local code, stdout = run_node(print_bound_address(wildcard), { SCALAR_PREVIEW_BIND_HOST = "127.0.0.1" })
 
       assert.are.equal(0, code, wildcard)
-      assert.are.equal("127.0.0.1", stdout, wildcard)
+      assert.are.equal("127.0.0.1", last_line(stdout), wildcard)
     end
   end)
 
@@ -41,7 +46,7 @@ describe("bind preload", function()
       local code, stdout = run_node(print_bound_address(options), { SCALAR_PREVIEW_BIND_HOST = "127.0.0.1" })
 
       assert.are.equal(0, code, options)
-      assert.are.equal("127.0.0.1", stdout, options)
+      assert.are.equal("127.0.0.1", last_line(stdout), options)
     end
   end)
 
@@ -59,9 +64,11 @@ describe("bind preload", function()
   end)
 
   node_it("stops with a message when the server ends up on an address other than the bind address", function()
-    local code, _, stderr = run_node(print_bound_address('0, "127.0.0.1"'), { SCALAR_PREVIEW_BIND_HOST = "127.0.0.2" })
+    local code, stdout, stderr =
+      run_node(print_bound_address('0, "127.0.0.1"'), { SCALAR_PREVIEW_BIND_HOST = "127.0.0.2" })
 
     assert.are.equal(1, code)
+    assert.are.equal("", stdout)
     assert.truthy(stderr:find("scalar-preview:", 1, true))
   end)
 
@@ -77,5 +84,20 @@ describe("bind preload", function()
 
     assert.are.equal(1, code)
     assert.truthy(stderr:find("scalar-preview:", 1, true))
+  end)
+
+  node_it("announces the address it bound, before any other listening handler runs", function()
+    local code, stdout = run_node(
+      [[const s = require("http").createServer();
+        s.on("listening", () => console.log("earlier-handler"));
+        s.listen(0, () => { console.log("callback"); s.close(); });]],
+      { SCALAR_PREVIEW_BIND_HOST = "127.0.0.1" }
+    )
+
+    assert.are.equal(0, code)
+    local lines = vim.split(stdout, "\n", { plain = true })
+    assert.truthy(lines[1]:match("^scalar%-preview: bound 127%.0%.0%.1:%d+$"))
+    assert.are.equal("earlier-handler", lines[2])
+    assert.are.equal("callback", lines[3])
   end)
 end)

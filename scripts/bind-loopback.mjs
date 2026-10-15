@@ -41,13 +41,23 @@ net.Server.prototype.listen = function (...args) {
 
   // Checked after binding rather than trusted from the rewrite above: if @scalar/cli ever
   // listens in a way the rewrite does not recognize, stopping is safer than quietly staying
-  // reachable from the network.
-  this.once("listening", () => {
+  // reachable from the network. Prepended so a listener the server registered before calling
+  // listen() cannot announce itself first.
+  //
+  // The line printed on success is what the plugin waits for before opening the browser. It
+  // cannot rely on this script having loaded at all: npm can replace NODE_OPTIONS (see
+  // `npm_config_node_options` in init.lua) and then there is no check and nothing to
+  // exit, so the absence of this line is the only sign left that the bind is not in effect.
+  this.prependOnceListener("listening", () => {
     const address = this.address();
-    if (address !== null && typeof address === "object" && normalize(address.address) !== normalize(bindHost)) {
+    if (address === null || typeof address !== "object") {
+      return;
+    }
+    if (normalize(address.address) !== normalize(bindHost)) {
       console.error(`scalar-preview: refusing to serve on ${address.address}, expected ${bindHost}`);
       process.exit(1);
     }
+    console.log(`scalar-preview: bound ${address.address}:${address.port}`);
   });
 
   return originalListen.apply(this, args);

@@ -47,6 +47,9 @@ local function looks_like_ip_address(value)
     or (value:find(":", 1, true) ~= nil and value:match("^[%x:%.]+$") ~= nil)
 end
 
+-- Must match what scripts/bind-loopback.mjs prints once the server is bound as asked.
+local BIND_CONFIRMED_MARKER = "scalar-preview: bound "
+
 local BIND_PRELOAD_URL = vim.uri_from_fname(
   vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h") .. "/scripts/bind-loopback.mjs"
 )
@@ -216,11 +219,40 @@ function M.start()
     vim.list_extend(cmd, { "-c", config_path })
   end
 
+  -- Read once here: the guard in on_stdout belongs to this job, whatever setup() later does.
+  local bind = M.config.bind
+  local bind_confirmed = false
+  local stdout_tail = ""
+
   local job_opts = {
     cwd = dir,
-    on_stdout = function(_, data)
-      for _, line in ipairs(data) do
-        if line:find("listening on") then
+    -- With `bind` set, "listening on" is only trusted after the preload has printed its
+    -- confirmation: if npm (or anything else) kept the preload from loading, the server
+    -- comes up on every interface without a word, and that is the one case the preload's own
+    -- exit(1) cannot cover. A line may arrive split across calls (see :help channel-lines),
+    -- so the unfinished last one is held back until the rest of it shows up.
+    on_stdout = function(id, data)
+      data = { stdout_tail .. data[1], unpack(data, 2) }
+      stdout_tail = data[#data]
+      for i = 1, #data - 1 do
+        local line = data[i]
+        if line:find(BIND_CONFIRMED_MARKER, 1, true) then
+          bind_confirmed = true
+        elseif line:find("listening on") then
+          if bind ~= nil and not bind_confirmed then
+            if id == M.job_id then
+              M.stop()
+            end
+            vim.notify(
+              string.format(
+                "ScalarPreview: stopped the server because it did not confirm it is bound to %s "
+                  .. "(it would have been reachable from the network)",
+                bind
+              ),
+              vim.log.levels.ERROR
+            )
+            return
+          end
           vim.ui.open(string.format("http://%s:%d", M.config.host, M.config.port))
         end
       end
