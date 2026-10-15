@@ -13,27 +13,60 @@ M.file_being_previewed = nil
 M.log_path = vim.fn.stdpath("state") .. "/scalar-preview.log"
 M.warned = false
 M.stderr_tail = ""
+-- Set (to the rejected value, as text) by setup() when `bind` was given but is not an IP
+-- address. Starting anyway would mean listening on every interface for someone who asked to
+-- be restricted, so M.start() refuses instead.
+M.invalid_bind = nil
 
 -- Reads `opts[key]` (the caller's partial table) without writing back to it -- `opts` isn't
 -- ours to mutate, and a future caller that reuses its own table across setup() calls would
 -- otherwise see fields silently disappear. Returns the value to actually use: the original
 -- if valid or absent, or nil (meaning "leave M.config's current value alone") if invalid.
-local function validate(opts, key, is_valid, expected_description)
+local function validate(opts, key, is_valid, expected_description, consequence)
   local value = opts[key]
   if value == nil or is_valid(value) then
     return value
   end
   vim.notify(
     string.format(
-      "ScalarPreview: ignoring invalid config.%s (expected %s, got %s)",
+      "ScalarPreview: ignoring invalid config.%s (expected %s, got %s)%s",
       key,
       expected_description,
-      vim.inspect(value)
+      vim.inspect(value),
+      consequence and ("; " .. consequence) or ""
     ),
     vim.log.levels.ERROR
   )
   return nil
 end
+
+-- Only a coarse check: the preload script's own net.isIP() is what actually decides. A
+-- hostname such as "localhost" is refused here too, because the preload's post-bind check
+-- compares addresses and a name would never match what the server reports. IPv4 is checked
+-- octet by octet since node rejects "999.1.1.1" and "01.2.3.4" and it is cheap to say so
+-- up front; IPv6 is not parsed here, so an odd-looking one is left to the preload.
+local function looks_like_ip_address(value)
+  if type(value) ~= "string" then
+    return false
+  end
+  local octets = { value:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$") }
+  if #octets == 4 then
+    for _, octet in ipairs(octets) do
+      if (#octet > 1 and octet:sub(1, 1) == "0") or tonumber(octet) > 255 then
+        return false
+      end
+    end
+    return true
+  end
+  return value:find(":", 1, true) ~= nil and value:match("^[%x:%.]+$") ~= nil
+end
+
+-- Must match what scripts/bind-loopback.mjs prints once the server is bound as asked.
+local BIND_CONFIRMED_MARKER = "scalar-preview: bound "
+
+local BIND_PRELOAD_URL = vim.uri_from_fname(
+  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h") .. "/scripts/bind-loopback.mjs"
+)
 
 function M.setup(opts)
   opts = opts or {}
@@ -58,9 +91,20 @@ function M.setup(opts)
     config = validate(opts, "config", function(v)
       return type(v) == "string"
     end, "a string (a path) or nil"),
+    bind = validate(
+      opts,
+      "bind",
+      looks_like_ip_address,
+      'an IP address string such as "127.0.0.1"',
+      "ScalarPreview will not start until it is fixed"
+    ),
   }
 
   M.config = vim.tbl_deep_extend("force", M.config, sanitized)
+
+  if opts.bind ~= nil then
+    M.invalid_bind = sanitized.bind == nil and vim.inspect(opts.bind) or nil
+  end
 end
 
 -- On Windows, `npx` resolves to `npx.cmd`, a batch file, and CreateProcess implicitly runs
@@ -100,6 +144,16 @@ end
 
 function M.start()
   local path = vim.fn.expand("%:p")
+
+  if M.invalid_bind ~= nil then
+    notify_refused(
+      "config.bind is invalid (got "
+        .. M.invalid_bind
+        .. "); not starting rather than listening on all network interfaces",
+      path
+    )
+    return
+  end
 
   if path == "" then
     notify_refused("no file to preview in this buffer (unnamed buffer)", nil)
@@ -193,12 +247,63 @@ function M.start()
     vim.list_extend(cmd, { "-c", config_path })
   end
 
+  -- Read once here: the guard in on_stdout belongs to this job, whatever setup() later does.
+  local bind = M.config.bind
+  local port = M.config.port
+  local bind_confirmed = false
+  local stdout_tail = ""
+
+  local function open_preview()
+    vim.ui.open(string.format("http://%s:%d", M.config.host, M.config.port))
+  end
+
   local job_opts = {
     cwd = dir,
-    on_stdout = function(_, data)
-      for _, line in ipairs(data) do
-        if line:find("listening on") then
-          vim.ui.open(string.format("http://%s:%d", M.config.host, M.config.port))
+    -- With `bind` set, "listening on" is only trusted after the preload has printed its
+    -- confirmation: if npm (or anything else) kept the preload from loading, the server
+    -- comes up on every interface without a word, and that is the one case the preload's own
+    -- exit(1) cannot cover. A line may arrive split across calls (see :help channel-lines),
+    -- so the unfinished last one is held back until the rest of it shows up. Without `bind`
+    -- none of this applies, and lines are looked at as they arrive, as before this guard
+    -- existed: holding the last one back would delay the browser until the CLI printed a
+    -- newline after "listening on", which it is not known to do.
+    on_stdout = function(id, data)
+      if bind == nil then
+        for _, line in ipairs(data) do
+          if line:find("listening on") then
+            open_preview()
+          end
+        end
+        return
+      end
+
+      data = { stdout_tail .. data[1], unpack(data, 2) }
+      stdout_tail = data[#data]
+      for i = 1, #data - 1 do
+        local line = data[i]
+        local _, marker_end = line:find(BIND_CONFIRMED_MARKER, 1, true)
+        if marker_end then
+          -- The port is compared too: a confirmation from some other preloaded process, or for
+          -- another port, says nothing about the server this job is about to announce.
+          if tonumber(line:sub(marker_end + 1):match(":(%d+)%s*$")) == port then
+            bind_confirmed = true
+          end
+        elseif line:find("listening on") then
+          if not bind_confirmed then
+            if id == M.job_id then
+              M.stop()
+            end
+            vim.notify(
+              string.format(
+                "ScalarPreview: stopped the server because it did not confirm it is bound to %s "
+                  .. "(it would have been reachable from the network)",
+                bind
+              ),
+              vim.log.levels.ERROR
+            )
+            return
+          end
+          open_preview()
         end
       end
     end,
@@ -271,6 +376,31 @@ function M.start()
       end
     end,
   }
+
+  -- Passed through the environment instead of argv: the CLI has no flag to carry it, and
+  -- NODE_OPTIONS is the one hook that reaches the node process npx spawns for it. The user's
+  -- own NODE_OPTIONS is appended to rather than replaced, since jobstart's `env` overrides
+  -- the inherited value outright.
+  --
+  -- npm_config_node_options is set to the same value because npm, whenever a `node-options`
+  -- setting exists in any .npmrc (including one in the previewed file's own directory tree)
+  -- replaces NODE_OPTIONS with it for the processes it spawns, which would silently drop the
+  -- preload and leave the server on every interface. An environment variable outranks the
+  -- .npmrc layers, so this one wins; the cost is that a `node-options` the user keeps in an
+  -- .npmrc is not applied to the preview. Reading it back out of npm to merge it in would
+  -- mean reimplementing npm's config resolution.
+  if M.config.bind ~= nil then
+    local import_flag = "--import=" .. BIND_PRELOAD_URL
+    local user_node_options = vim.env.NODE_OPTIONS
+    local node_options = (user_node_options ~= nil and user_node_options ~= "")
+        and (user_node_options .. " " .. import_flag)
+      or import_flag
+    job_opts.env = {
+      SCALAR_PREVIEW_BIND_HOST = M.config.bind,
+      NODE_OPTIONS = node_options,
+      npm_config_node_options = node_options,
+    }
+  end
 
   -- jobstart is documented to return -1 if cmd[0] isn't executable, but called through
   -- vim.fn, as here, it raises that failure (`E475: ... is not executable`, e.g. `npx`
