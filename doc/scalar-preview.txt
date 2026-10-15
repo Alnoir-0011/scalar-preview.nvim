@@ -83,10 +83,18 @@ require("scalar-preview").setup({opts})
                 Other values: `"::1"` (IPv6 loopback only), `"0.0.0.0"` (every
                 IPv4 interface, e.g. in a container whose forwarded port must
                 be bound to all interfaces), or one of your machine's own
-                addresses. It must be an IP address; a hostname such as
-                `"localhost"` is rejected. A rejected value is reported and
-                ignored, so the server then listens on every interface, as
-                if `bind` were unset.
+                addresses. With any address other than loopback or
+                `"0.0.0.0"`, also set |scalar-preview-host| to it, since
+                `localhost` would no longer reach the server.
+
+                It must be an IP address. A hostname such as `"localhost"`,
+                an empty string, a non-string, or a malformed IPv4 address
+                such as `"999.1.1.1"` is rejected with an error, and
+                `:ScalarPreview` then refuses to start until it is fixed
+                rather than listening on every interface. An IPv6 address
+                with a zone id (`fe80::1%en0`) is not accepted. A change
+                applies the next time a preview starts; one already running
+                keeps the address it was started with.
 
                 `@scalar/cli` has no option for this, so the plugin starts it
                 with `NODE_OPTIONS=--import=<scripts/bind-loopback.mjs>`,
@@ -95,10 +103,19 @@ require("scalar-preview").setup({opts})
                 preview while `bind` is set: npm would replace
                 `NODE_OPTIONS` with it and drop the script, so the plugin
                 also sets `npm_config_node_options`, which takes precedence
-                over every `.npmrc`. The script
-                stops the server with an error if it ends up listening on any
-                other address. Verified on macOS with Node 25 and
-                `@scalar/cli` 2.11.0; not verified on Windows.
+                over every `.npmrc`.
+
+                The script stops the server with an error if it ends up
+                listening on any other address, and prints a confirmation
+                line once the bind is in place. The plugin waits for that line
+                before opening the browser, and stops the server with an error
+                if it reports listening without having confirmed the bind.
+
+                Checked by hand on macOS with Node 25 and `@scalar/cli`
+                2.11.0, running the real CLI through `npx`. CI covers the
+                script itself and, through `npm exec`, that the setting
+                reaches a process started by npm on Linux; it does not run
+                `@scalar/cli`. Not checked on Windows.
 
                                                   *scalar-preview-cli_version*
     cli_version (string, default: `"latest"`)
