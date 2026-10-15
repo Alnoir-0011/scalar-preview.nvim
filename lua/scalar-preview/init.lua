@@ -249,8 +249,13 @@ function M.start()
 
   -- Read once here: the guard in on_stdout belongs to this job, whatever setup() later does.
   local bind = M.config.bind
+  local port = M.config.port
   local bind_confirmed = false
   local stdout_tail = ""
+
+  local function open_preview()
+    vim.ui.open(string.format("http://%s:%d", M.config.host, M.config.port))
+  end
 
   local job_opts = {
     cwd = dir,
@@ -258,16 +263,33 @@ function M.start()
     -- confirmation: if npm (or anything else) kept the preload from loading, the server
     -- comes up on every interface without a word, and that is the one case the preload's own
     -- exit(1) cannot cover. A line may arrive split across calls (see :help channel-lines),
-    -- so the unfinished last one is held back until the rest of it shows up.
+    -- so the unfinished last one is held back until the rest of it shows up. Without `bind`
+    -- none of this applies, and lines are looked at as they arrive, as before this guard
+    -- existed: holding the last one back would delay the browser until the CLI printed a
+    -- newline after "listening on", which it is not known to do.
     on_stdout = function(id, data)
+      if bind == nil then
+        for _, line in ipairs(data) do
+          if line:find("listening on") then
+            open_preview()
+          end
+        end
+        return
+      end
+
       data = { stdout_tail .. data[1], unpack(data, 2) }
       stdout_tail = data[#data]
       for i = 1, #data - 1 do
         local line = data[i]
-        if line:find(BIND_CONFIRMED_MARKER, 1, true) then
-          bind_confirmed = true
+        local _, marker_end = line:find(BIND_CONFIRMED_MARKER, 1, true)
+        if marker_end then
+          -- The port is compared too: a confirmation from some other preloaded process, or for
+          -- another port, says nothing about the server this job is about to announce.
+          if tonumber(line:sub(marker_end + 1):match(":(%d+)%s*$")) == port then
+            bind_confirmed = true
+          end
         elseif line:find("listening on") then
-          if bind ~= nil and not bind_confirmed then
+          if not bind_confirmed then
             if id == M.job_id then
               M.stop()
             end
@@ -281,7 +303,7 @@ function M.start()
             )
             return
           end
-          vim.ui.open(string.format("http://%s:%d", M.config.host, M.config.port))
+          open_preview()
         end
       end
     end,

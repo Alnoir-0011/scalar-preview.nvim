@@ -71,7 +71,9 @@ net.Server.prototype.listen = function (...args) {
       console.error(`scalar-preview: refusing to serve on ${address.address}, expected ${bindHost}`);
       process.exit(1);
     }
-    console.log(`scalar-preview: bound ${address.address}:${address.port}`);
+    // Bracketed like a URL authority so that "::1" and its port do not run together.
+    const shown = net.isIPv6(address.address) ? `[${address.address}]` : address.address;
+    console.log(`scalar-preview: bound ${shown}:${address.port}`);
   });
 
   return originalListen.apply(this, args);

@@ -102,6 +102,9 @@ describe("bind preload", function()
   end
 
   unix_it("leaves a unix socket path alone", function()
+    -- Not vim.fn.tempname(): on macOS that lives under /var/folders/... and a socket path
+    -- longer than about 104 bytes makes listen() fail with EINVAL, which would hide the
+    -- behavior under test.
     local socket_path = "/tmp/scalar-preview-spec-" .. vim.uv.hrtime() .. ".sock"
     local code, stdout = run_node(
       string.format(
@@ -178,5 +181,15 @@ describe("bind preload", function()
     assert.truthy(lines[1]:match("^scalar%-preview: bound 127%.0%.0%.1:%d+$"))
     assert.are.equal("earlier-handler", lines[2])
     assert.are.equal("callback", lines[3])
+  end)
+
+  ipv6_it("writes an IPv6 address in brackets so the port stays readable", function()
+    local code, stdout = run_node(
+      [[const s = require("http").createServer(); s.listen(0, () => s.close());]],
+      { SCALAR_PREVIEW_BIND_HOST = "::1" }
+    )
+
+    assert.are.equal(0, code)
+    assert.truthy(stdout:match("^scalar%-preview: bound %[::1%]:%d+$"))
   end)
 end)
