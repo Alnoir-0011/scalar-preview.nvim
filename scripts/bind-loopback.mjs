@@ -15,12 +15,23 @@ if (bindHost === undefined || net.isIP(bindHost) === 0) {
   process.exit(1);
 }
 
-const wildcards = new Set(["0.0.0.0", "::"]);
-
 const isPort = (value) => typeof value === "number" || (typeof value === "string" && /^\d+$/.test(value));
 
 // IPv6 addresses can be written several ways; URL gives one canonical form for both sides.
 const normalize = (address) => (net.isIPv6(address) ? new URL(`http://[${address}]`).hostname : address);
+
+// A host slot that names no particular host makes node listen on every interface, so all of
+// these count as "not specified". Listing the spellings ("::", "::0", ...) would miss the next
+// one, so IPv6 is compared in canonical form instead.
+const namesNoHost = (host) => {
+  if (host === undefined || host === null || host === "") {
+    return true;
+  }
+  if (typeof host !== "string") {
+    return false;
+  }
+  return host === "0.0.0.0" || (net.isIPv6(host) && normalize(host) === "[::]");
+};
 
 const originalListen = net.Server.prototype.listen;
 
@@ -28,13 +39,16 @@ net.Server.prototype.listen = function (...args) {
   const [first, second] = args;
 
   if (isPort(first)) {
-    if (second === undefined || typeof second === "function") {
+    // listen(port), listen(port, cb) and listen(port, backlog) have no host slot to fill; in
+    // every other form the second argument is the host, so it is replaced in place and a
+    // backlog or callback after it stays where node expects it.
+    if (args.length === 1 || typeof second === "function" || typeof second === "number") {
       args.splice(1, 0, bindHost);
-    } else if (wildcards.has(second)) {
+    } else if (namesNoHost(second)) {
       args[1] = bindHost;
     }
   } else if (first !== null && typeof first === "object" && first.port !== undefined) {
-    if (first.host === undefined || wildcards.has(first.host)) {
+    if (namesNoHost(first.host)) {
       args[0] = { ...first, host: bindHost };
     }
   }
