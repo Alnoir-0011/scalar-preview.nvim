@@ -54,6 +54,14 @@ describe("bind option", function()
     assert.truthy(job.opts.env.NODE_OPTIONS:find("--import=", 1, true))
   end)
 
+  it("does not leave a leading space when the user's NODE_OPTIONS is empty", function()
+    vim.env.NODE_OPTIONS = ""
+
+    local job = start_with({ port = 8000, bind = "127.0.0.1" })
+
+    assert.truthy(vim.startswith(job.opts.env.NODE_OPTIONS, "--import="))
+  end)
+
   it("hands npm the same NODE_OPTIONS through npm_config_node_options", function()
     vim.env.NODE_OPTIONS = "--max-old-space-size=512"
 
@@ -70,42 +78,66 @@ describe("bind option", function()
     end
   end)
 
-  it("accepts IPv4 and IPv6 addresses", function()
-    for _, good in ipairs({ "127.0.0.1", "::1", "0.0.0.0" }) do
-      package.loaded["scalar-preview"] = nil
-      sp = require("scalar-preview")
-      jobs, notifications = stub.install()
-
+  for _, good in ipairs({ "127.0.0.1", "::1", "0.0.0.0", "192.168.1.20", "255.255.255.255" }) do
+    it("accepts " .. good, function()
       local job = start_with({ port = 8000, bind = good })
 
-      assert.are.equal(good, job.opts.env.SCALAR_PREVIEW_BIND_HOST, good .. " should be accepted as-is")
-      assert.are.equal(0, #stub.errors(notifications), good .. " should not be rejected")
+      assert.are.equal(good, job.opts.env.SCALAR_PREVIEW_BIND_HOST)
+      assert.are.equal(0, #stub.errors(notifications))
+    end)
+  end
 
-      stub.restore()
-    end
-  end)
+  -- "fe80::1%en0" is a valid address to node, but a zone id is not something this check
+  -- tries to recognize.
+  local invalid_values = { 123, false, "", "localhost", "my-host.local", "999.1.1.1", "01.2.3.4", "fe80::1%en0" }
 
-  it("rejects a value that is not an IP address and falls back to unset", function()
-    for _, bad in ipairs({ 123, false, "", "localhost", "my-host.local" }) do
-      package.loaded["scalar-preview"] = nil
-      sp = require("scalar-preview")
-      jobs, notifications = stub.install()
-
+  for _, bad in ipairs(invalid_values) do
+    it("refuses to start rather than listen on every interface when bind is " .. vim.inspect(bad), function()
       local job = start_with({ port = 8000, bind = bad })
 
-      assert.are.equal(1, #jobs.started, vim.inspect(bad) .. " should still start")
-      assert.is_nil(job.opts.env, vim.inspect(bad) .. " should fall back to unset")
-      assert.are.equal(1, #stub.errors(notifications), vim.inspect(bad) .. " should be rejected")
+      assert.is_nil(job)
+      local errors = stub.errors(notifications)
+      assert.are.equal(2, #errors) -- one from setup(), one from the refused start
+      assert.truthy(errors[2].msg:find("config.bind", 1, true))
+    end)
+  end
 
-      stub.restore()
-    end
-  end)
-
-  it("says the server will listen on all network interfaces when it rejects a value", function()
+  it("tells the user at setup that ScalarPreview will not start until bind is fixed", function()
     sp.setup({ port = 8000, bind = "localhost" })
 
     local errors = stub.errors(notifications)
     assert.are.equal(1, #errors)
-    assert.truthy(errors[1].msg:find("all network interfaces", 1, true))
+    assert.truthy(errors[1].msg:find("will not start", 1, true))
+  end)
+
+  it("still refuses to start when an invalid bind follows a valid one", function()
+    sp.setup({ port = 8000, bind = "127.0.0.1" })
+    sp.setup({ bind = "localhost" })
+    vim.cmd.edit(file_a)
+
+    sp.start()
+
+    assert.are.equal(0, #jobs.started)
+  end)
+
+  it("starts again once a valid bind is set after an invalid one", function()
+    sp.setup({ port = 8000, bind = "localhost" })
+    sp.setup({ bind = "127.0.0.1" })
+    vim.cmd.edit(file_a)
+
+    sp.start()
+
+    assert.are.equal(1, #jobs.started)
+    assert.are.equal("127.0.0.1", jobs.started[1].opts.env.SCALAR_PREVIEW_BIND_HOST)
+  end)
+
+  it("does not let a setup() that leaves bind out clear an invalid bind", function()
+    sp.setup({ port = 8000, bind = "localhost" })
+    sp.setup({ port = 8001 })
+    vim.cmd.edit(file_a)
+
+    sp.start()
+
+    assert.are.equal(0, #jobs.started)
   end)
 end)

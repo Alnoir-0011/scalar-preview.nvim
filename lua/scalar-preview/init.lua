@@ -13,6 +13,10 @@ M.file_being_previewed = nil
 M.log_path = vim.fn.stdpath("state") .. "/scalar-preview.log"
 M.warned = false
 M.stderr_tail = ""
+-- Set (to the rejected value, as text) by setup() when `bind` was given but is not an IP
+-- address. Starting anyway would mean listening on every interface for someone who asked to
+-- be restricted, so M.start() refuses instead.
+M.invalid_bind = nil
 
 -- Reads `opts[key]` (the caller's partial table) without writing back to it -- `opts` isn't
 -- ours to mutate, and a future caller that reuses its own table across setup() calls would
@@ -38,13 +42,23 @@ end
 
 -- Only a coarse check: the preload script's own net.isIP() is what actually decides. A
 -- hostname such as "localhost" is refused here too, because the preload's post-bind check
--- compares addresses and a name would never match what the server reports.
+-- compares addresses and a name would never match what the server reports. IPv4 is checked
+-- octet by octet since node rejects "999.1.1.1" and "01.2.3.4" and it is cheap to say so
+-- up front; IPv6 is not parsed here, so an odd-looking one is left to the preload.
 local function looks_like_ip_address(value)
   if type(value) ~= "string" then
     return false
   end
-  return value:match("^%d+%.%d+%.%d+%.%d+$") ~= nil
-    or (value:find(":", 1, true) ~= nil and value:match("^[%x:%.]+$") ~= nil)
+  local octets = { value:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$") }
+  if #octets == 4 then
+    for _, octet in ipairs(octets) do
+      if (#octet > 1 and octet:sub(1, 1) == "0") or tonumber(octet) > 255 then
+        return false
+      end
+    end
+    return true
+  end
+  return value:find(":", 1, true) ~= nil and value:match("^[%x:%.]+$") ~= nil
 end
 
 -- Must match what scripts/bind-loopback.mjs prints once the server is bound as asked.
@@ -82,11 +96,15 @@ function M.setup(opts)
       "bind",
       looks_like_ip_address,
       'an IP address string such as "127.0.0.1"',
-      "the server will listen on all network interfaces"
+      "ScalarPreview will not start until it is fixed"
     ),
   }
 
   M.config = vim.tbl_deep_extend("force", M.config, sanitized)
+
+  if opts.bind ~= nil then
+    M.invalid_bind = sanitized.bind == nil and vim.inspect(opts.bind) or nil
+  end
 end
 
 -- On Windows, `npx` resolves to `npx.cmd`, a batch file, and CreateProcess implicitly runs
@@ -126,6 +144,16 @@ end
 
 function M.start()
   local path = vim.fn.expand("%:p")
+
+  if M.invalid_bind ~= nil then
+    notify_refused(
+      "config.bind is invalid (got "
+        .. M.invalid_bind
+        .. "); not starting rather than listening on all network interfaces",
+      path
+    )
+    return
+  end
 
   if path == "" then
     notify_refused("no file to preview in this buffer (unnamed buffer)", nil)
