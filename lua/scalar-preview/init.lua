@@ -64,6 +64,8 @@ end
 -- Must match what scripts/bind-loopback.mjs prints once the server is bound as asked.
 local BIND_CONFIRMED_MARKER = "scalar-preview: bound "
 
+local LISTENING_MARKER = "listening on"
+
 local BIND_PRELOAD_URL = vim.uri_from_fname(
   vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h") .. "/scripts/bind-loopback.mjs"
 )
@@ -229,6 +231,14 @@ function M.start()
   local dir = vim.fn.fnamemodify(path, ":h")
   local basename = "./" .. vim.fn.fnamemodify(path, ":t")
 
+  -- Not read from M.config inside the callbacks: setup() can change it while this job runs,
+  -- and the guard and the address it opens must stay those the job was started with.
+  local bind = M.config.bind
+  local host = M.config.host
+  local port = M.config.port
+  local bind_confirmed = false
+  local stdout_tail = ""
+
   -- A list {cmd} runs the executable directly, with no 'shell' involved, so none of these
   -- arguments need (or benefit from) shell-escaping -- each one reaches the process exactly
   -- as given, whatever characters it contains.
@@ -241,20 +251,14 @@ function M.start()
     basename,
     "-w",
     "-p",
-    tostring(M.config.port),
+    tostring(port),
   }
   if config_path ~= nil then
     vim.list_extend(cmd, { "-c", config_path })
   end
 
-  -- Read once here: the guard in on_stdout belongs to this job, whatever setup() later does.
-  local bind = M.config.bind
-  local port = M.config.port
-  local bind_confirmed = false
-  local stdout_tail = ""
-
   local function open_preview()
-    vim.ui.open(string.format("http://%s:%d", M.config.host, M.config.port))
+    vim.ui.open(string.format("http://%s:%d", host, port))
   end
 
   local job_opts = {
@@ -264,23 +268,34 @@ function M.start()
     -- comes up on every interface without a word, and that is the one case the preload's own
     -- exit(1) cannot cover. A line may arrive split across calls (see :help channel-lines),
     -- so the unfinished last one is held back until the rest of it shows up. Without `bind`
-    -- none of this applies, and lines are looked at as they arrive, as before this guard
-    -- existed: holding the last one back would delay the browser until the CLI printed a
-    -- newline after "listening on", which it is not known to do.
+    -- the unfinished last line is looked at too instead of being held back: that would delay
+    -- the browser until the CLI printed a newline after "listening on", which it is not known
+    -- to do.
     on_stdout = function(id, data)
+      -- Joined in place: unpack(data, 2) would raise "too many results to unpack" once a burst
+      -- of about 8000 lines arrives in one call, and the "listening on" in it would go unseen.
+      data[1] = stdout_tail .. data[1]
+
       if bind == nil then
         for _, line in ipairs(data) do
-          if line:find("listening on") then
+          if line:find(LISTENING_MARKER, 1, true) then
             open_preview()
           end
         end
+        -- Only enough to complete a marker cut between two calls. Holding the whole unfinished
+        -- line would copy it again on every call, and a tail as long as the marker itself would
+        -- be found a second time once the rest of the line arrives.
+        stdout_tail = data[#data]:sub(-(#LISTENING_MARKER - 1))
         return
       end
 
-      data = { stdout_tail .. data[1], unpack(data, 2) }
       stdout_tail = data[#data]
       for i = 1, #data - 1 do
         local line = data[i]
+        -- Not anchored to the start of the line: the CLI writes a cursor-show escape right in
+        -- front of the preload's line, so the confirmation never begins one and anchoring would
+        -- stop every start with `bind`. It would not keep a spec out either, since a title
+        -- containing a newline can put its own line there.
         local _, marker_end = line:find(BIND_CONFIRMED_MARKER, 1, true)
         if marker_end then
           -- The port is compared too: a confirmation from some other preloaded process, or for
@@ -288,7 +303,7 @@ function M.start()
           if tonumber(line:sub(marker_end + 1):match(":(%d+)%s*$")) == port then
             bind_confirmed = true
           end
-        elseif line:find("listening on") then
+        elseif line:find(LISTENING_MARKER, 1, true) then
           if not bind_confirmed then
             if id == M.job_id then
               M.stop()
@@ -389,14 +404,14 @@ function M.start()
   -- .npmrc layers, so this one wins; the cost is that a `node-options` the user keeps in an
   -- .npmrc is not applied to the preview. Reading it back out of npm to merge it in would
   -- mean reimplementing npm's config resolution.
-  if M.config.bind ~= nil then
+  if bind ~= nil then
     local import_flag = "--import=" .. BIND_PRELOAD_URL
     local user_node_options = vim.env.NODE_OPTIONS
     local node_options = (user_node_options ~= nil and user_node_options ~= "")
         and (user_node_options .. " " .. import_flag)
       or import_flag
     job_opts.env = {
-      SCALAR_PREVIEW_BIND_HOST = M.config.bind,
+      SCALAR_PREVIEW_BIND_HOST = bind,
       NODE_OPTIONS = node_options,
       npm_config_node_options = node_options,
     }
