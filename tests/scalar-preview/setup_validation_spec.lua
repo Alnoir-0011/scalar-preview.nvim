@@ -76,6 +76,40 @@ describe("setup() validation", function()
     assert.are.equal(1, #stub.errors(notifications))
   end)
 
+  it("rejects a port that is not an integer from 1 to 65535 and falls back to the default", function()
+    for _, bad in ipairs({ 8000.5, 0, -1, 65536, 1 / 0, 0 / 0 }) do
+      package.loaded["scalar-preview"] = nil
+      sp = require("scalar-preview")
+      jobs, notifications = stub.install()
+      sp.setup({ port = bad })
+      vim.cmd.edit(file_a)
+
+      sp.start()
+
+      assert.truthy(vim.tbl_contains(jobs.started[1].cmd, "8000"), tostring(bad) .. " should fall back to the default")
+      assert.are.equal(1, #stub.errors(notifications), tostring(bad) .. " should be rejected")
+
+      stub.restore()
+    end
+  end)
+
+  it("accepts the lowest and highest valid port", function()
+    for _, good in ipairs({ 1, 65535 }) do
+      package.loaded["scalar-preview"] = nil
+      sp = require("scalar-preview")
+      jobs, notifications = stub.install()
+      sp.setup({ port = good })
+      vim.cmd.edit(file_a)
+
+      sp.start()
+
+      assert.truthy(vim.tbl_contains(jobs.started[1].cmd, tostring(good)))
+      assert.are.equal(0, #stub.errors(notifications), good .. " should not be rejected")
+
+      stub.restore()
+    end
+  end)
+
   it("rejects a non-string host and falls back to the default", function()
     sp.setup({ host = 123 })
 

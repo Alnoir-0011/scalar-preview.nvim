@@ -64,7 +64,8 @@ require("scalar-preview").setup({opts})
     Fields of {opts}: ~
 
     port        (number, default: `8000`)
-                The local port the preview server listens on.
+                The local port the preview server listens on. It must be an
+                integer from 1 to 65535.
 
                                                          *scalar-preview-host*
     host        (string, default: `"localhost"`)

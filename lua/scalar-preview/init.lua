@@ -76,8 +76,8 @@ function M.setup(opts)
   -- existing value for it untouched either way.
   local sanitized = {
     port = validate(opts, "port", function(v)
-      return type(v) == "number"
-    end, "a number"),
+      return type(v) == "number" and v % 1 == 0 and v >= 1 and v <= 65535
+    end, "an integer from 1 to 65535"),
     host = validate(opts, "host", function(v)
       return type(v) == "string"
     end, "a string"),
