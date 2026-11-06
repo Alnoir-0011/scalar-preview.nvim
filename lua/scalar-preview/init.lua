@@ -251,7 +251,7 @@ function M.start()
     basename,
     "-w",
     "-p",
-    tostring(port),
+    string.format("%d", port),
   }
   if config_path ~= nil then
     vim.list_extend(cmd, { "-c", config_path })
@@ -272,8 +272,16 @@ function M.start()
     -- the browser until the CLI printed a newline after "listening on", which it is not known
     -- to do.
     on_stdout = function(id, data)
+      -- Same reason as in on_stderr: the old server's output can still arrive after a restart,
+      -- and its "listening on" would open the browser for a server that is being stopped.
+      if id ~= M.job_id then
+        return
+      end
+
       -- Joined in place: unpack(data, 2) would raise "too many results to unpack" once a burst
       -- of about 8000 lines arrives in one call, and the "listening on" in it would go unseen.
+      -- This writes into the table the caller passed in; Neovim hands over a fresh one on every
+      -- call, and copying a burst of lines would cost what unpack() could not take.
       data[1] = stdout_tail .. data[1]
 
       if bind == nil then
@@ -305,9 +313,7 @@ function M.start()
           end
         elseif line:find(LISTENING_MARKER, 1, true) then
           if not bind_confirmed then
-            if id == M.job_id then
-              M.stop()
-            end
+            M.stop()
             vim.notify(
               string.format(
                 "ScalarPreview: stopped the server because it did not confirm it is bound to %s "

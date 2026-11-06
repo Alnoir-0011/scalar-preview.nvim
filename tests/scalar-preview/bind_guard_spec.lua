@@ -199,6 +199,80 @@ describe("bind guard", function()
     end
   end)
 
+  -- Feeds `stream` in pieces of `size` characters, each piece read as the channel would hand it
+  -- over: split at its newlines, the first and last elements possibly partial.
+  local function feed_in_pieces(job, stream, size)
+    local whole = table.concat(stream, "\n")
+    for from = 1, #whole, size do
+      job.opts.on_stdout(job.id, vim.split(whole:sub(from, from + size - 1), "\n", { plain = true }))
+    end
+  end
+
+  it("opens the browser once however small the pieces the CLI's output arrives in, with bind", function()
+    for _, size in ipairs({ 1, 2, 3, 5, 7, 11, 12, 13 }) do
+      opened = {}
+      jobs.started, jobs.stopped = {}, {}
+      local job = start_job({ bind = "127.0.0.1" })
+
+      feed_in_pieces(job, real_stream, size)
+
+      assert.are.same({ "http://localhost:8000" }, opened, "pieces of " .. size)
+      assert.are.same({}, jobs.stopped, "pieces of " .. size)
+      sp.stop()
+    end
+  end)
+
+  it("opens the browser once however small the pieces the CLI's output arrives in, without bind", function()
+    for _, size in ipairs({ 1, 2, 3, 5, 7, 11, 12, 13 }) do
+      opened = {}
+      jobs.started, jobs.stopped = {}, {}
+      local job = start_job({})
+
+      feed_in_pieces(job, real_stream, size)
+
+      assert.are.same({ "http://localhost:8000" }, opened, "pieces of " .. size)
+      sp.stop()
+    end
+  end)
+
+  describe("after the preview was restarted for another file", function()
+    local old_job, new_job
+
+    local function restart(opts)
+      old_job = start_job(opts)
+      vim.cmd.edit(stub.tempfile("b.yaml"))
+      sp.start()
+      new_job = jobs.started[2]
+    end
+
+    it("ignores a listening line from the old server, without bind", function()
+      restart({})
+
+      old_job.opts.on_stdout(old_job.id, { listening, "" })
+
+      assert.are.same({}, opened)
+    end)
+
+    it("ignores a confirmed listening line from the old server, with bind", function()
+      restart({ bind = "127.0.0.1" })
+
+      old_job.opts.on_stdout(old_job.id, { confirmed, listening, "" })
+
+      assert.are.same({}, opened)
+    end)
+
+    it("neither reports nor stops anything for an unconfirmed old server, with bind", function()
+      restart({ bind = "127.0.0.1" })
+      local stopped_before = #jobs.stopped
+
+      old_job.opts.on_stdout(old_job.id, { listening, "" })
+
+      assert.are.equal(stopped_before, #jobs.stopped)
+      assert.are.equal(0, #stub.errors(notifications))
+      assert.are.equal(new_job.id, sp.job_id)
+    end)
+  end)
+
   it("opens the address the job was started with even if setup() changes it afterwards", function()
     local job = start_job({})
 
