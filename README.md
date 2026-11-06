@@ -44,7 +44,7 @@ This starts a local preview server via `npx @scalar/cli document serve --watch` 
 
 ```lua
 require("scalar-preview").setup({
-  port = 8000,         -- default: 8000
+  port = 8000,         -- default: 8000; an integer from 1 to 65535
   host = "localhost",  -- default: "localhost", the hostname used to build the URL that's
                         -- opened in your browser; it does NOT control who can connect — use
                         -- `bind` for that (see "Restricting who can reach the preview").
